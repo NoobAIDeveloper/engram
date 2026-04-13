@@ -1,0 +1,12 @@
+{
+  "useMarkdownLinks": false,
+  "newLinkFormat": "shortest",
+  "attachmentFolderPath": "raw/attachments",
+  "alwaysUpdateLinks": true,
+  "showLineNumber": true,
+  "spellcheck": false,
+  "defaultViewMode": "preview",
+  "livePreview": true,
+  "showFrontmatter": true,
+  "promptDelete": true
+}

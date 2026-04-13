@@ -1,0 +1,192 @@
+# {{kb_name}}
+
+A personal knowledge base built from Twitter/X bookmarks. Bookmarks are synced from a logged-in browser session, clustered into topic batches by a deterministic script using a Claude-derived map, and synthesized into wiki pages. This file is the operational contract between the user and Claude.
+
+> This KB is managed by the **twitter-wiki** Claude Code skill. The skill provides slash commands (`/kb-sync`, `/kb-ingest`, `/kb-recluster`, `/kb-query`, `/kb-lint`, `/kb-status`) and the synthesis logic. See `~/.claude/skills/twitter-wiki/SKILL.md` for the full operational spec.
+
+Created: {{created_date}}
+
+---
+
+## Directory layout
+
+```
+{{kb_path}}/
+├── CLAUDE.md                    # This file
+├── raw/
+│   ├── bookmarks.jsonl          # Canonical bookmark store (sync.py writes; do not hand-edit)
+│   └── bookmarks/               # Topic batches (preprocess.py writes; do not hand-edit)
+│       ├── _manifest.md
+│       └── <topic>.md
+├── wiki/                        # Claude-only synthesized pages
+│   ├── index.md                 # Master catalog (markdown table)
+│   ├── log.md                   # Chronological audit log
+│   ├── queries/                 # Saved query-result pages
+│   └── <topic-pages>.md
+├── notes/                       # User-only personal notes — Claude never reads or writes here
+├── .twitter-wiki/
+│   ├── sync-meta.json           # Sync state (cursor, last sync time, count)
+│   ├── cluster-map.yaml         # Topic → match rules (Claude generates)
+│   └── ingest-state.json        # Which batches were synthesized at which sizes
+├── .obsidian/                   # Obsidian vault config
+└── .gitignore
+```
+
+**Hard rule:** `wiki/` is Claude's. `notes/` is the user's. They never overlap. Claude never reads `notes/`. The user never edits files in `wiki/` (they may *delete* a wiki page they don't want, but they don't edit content — that gets clobbered on the next ingest).
+
+---
+
+## Wiki page conventions
+
+Every page in `wiki/` follows the same shape.
+
+### Frontmatter (required)
+
+```yaml
+---
+title: "Human Readable Title"
+type: concept | summary | reference | query | stale
+sources:
+  - raw/bookmarks/<topic>.md
+  - <other source paths>
+created: YYYY-MM-DD
+updated: YYYY-MM-DD
+tags: [<emerge from content, no preset taxonomy>]
+---
+```
+
+`type` values:
+- `concept` — synthesized topic page (most pages). **Requires a counter-arguments section.**
+- `summary` — condensed summary of a single source (rare for bookmark wikis)
+- `reference` — list/table page (e.g. "tools mentioned across the KB")
+- `query` — saved answer to a `/kb-query`
+- `stale` — superseded by recluster but kept for history
+
+### Body structure
+
+```markdown
+**TLDR:** 3–5 sentence dense summary. Lead with the most important insight. No filler.
+
+## <Sub-theme 1>
+
+Synthesized prose. Group bookmarks by sub-theme, not by author. Attribute insights to authors via `[@handle](url)` (or just @handle in prose). For tweets with >1000 likes, include a short verbatim quote, attributed.
+
+## <Sub-theme 2>
+
+...
+
+## Counter-arguments
+
+(REQUIRED on `type: concept` pages.) Substantive critiques of the claims above. If the bookmarks are one-sided, note that explicitly and surface the strongest opposing view you can construct from general knowledge — but mark it as such. The goal is to inoculate against echo chambers.
+
+## See also
+
+- [[other-related-page]]
+- [[stub-for-future-page]]
+```
+
+### Naming
+
+- **kebab-case filenames:** `large-language-models.md`, not `LargeLanguageModels.md` or `large_language_models.md`.
+- Filenames are derived from the topic name in `cluster-map.yaml` (also kebab-case).
+
+### Linking
+
+- **Internal:** `[[wikilink]]` — Obsidian-style. Stub pages are OK; if you reference `[[future-topic]]` and it doesn't exist, that's a signal that future ingest may create it.
+- **External:** standard markdown `[text](url)`. Always include the X URL when quoting a bookmark.
+
+### Tags
+
+Tags are not a preset taxonomy. They emerge from the content of *this* KB. If the user bookmarks a lot of one domain, that domain becomes a tag. Don't force tags from a global list — let them grow organically. Reuse existing tags when applicable rather than inventing variants.
+
+---
+
+## Special files
+
+### `wiki/index.md`
+
+Single markdown table catalog. Regenerated on every ingest and recluster. Format:
+
+```markdown
+---
+title: "Knowledge Base Index"
+type: reference
+updated: YYYY-MM-DD
+---
+
+**TLDR:** Master catalog of all wiki pages, currently {N} pages from {M} bookmarks.
+
+| Page | Type | Tags | TLDR |
+|---|---|---|---|
+| [[<topic>]] | concept | tag1, tag2 | One-line summary |
+```
+
+Group rows by category if there's a natural grouping (Claude decides), alphabetical otherwise.
+
+### `wiki/log.md`
+
+Chronological audit log, **newest first**. One section per date. Operation entries:
+
+```markdown
+## YYYY-MM-DD
+
+- **sync** — fetched N new bookmarks (total: T)
+- **ingest-batch** — `<topic>` (N bookmarks) → `[[<topic>]]` (created | updated)
+- **recluster** — re-derived map: split X→Y+Z, merged A+B→C, renamed D→E
+- **query** — "user question" → `[[queries/<slug>]]`
+- **lint** — fixed N issues: missing-frontmatter (N), broken-wikilinks (N), ...
+- **note** — free-form annotation
+```
+
+---
+
+## Source classification & extraction
+
+For **tweets/threads** (the only source type for v1):
+
+- Extract the **core insight** plus enough surrounding context to make it standalone.
+- Include **author handle** and a link to the original tweet.
+- For tweets with >1000 likes, **include a short direct quote** in addition to the synthesis.
+- Note when the author's bio/expertise is relevant to evaluating the claim ("Andrej Karpathy is a former director of AI at Tesla, so..." — but be brief).
+- Engagement metrics (likes/retweets) are useful but not authoritative — virality ≠ correctness. Note when something is high-engagement but methodologically weak.
+- Skip tweets that are pure media (no text), pure links with no commentary, or low-value engagement bait.
+
+If a future version adds articles or longer-form sources, extraction depth will scale up.
+
+---
+
+## Core operations
+
+These are run by the user via slash commands and orchestrated by the **twitter-wiki** skill. See the skill's SKILL.md for the full workflows.
+
+| Command | Effect |
+|---|---|
+| `/kb-sync` | Pulls new bookmarks from the user's browser session into `raw/bookmarks.jsonl` |
+| `/kb-ingest` | First run bootstraps `cluster-map.yaml`. Then preprocesses into batches, then synthesizes/updates wiki pages |
+| `/kb-recluster [hint]` | Re-derives the topic map and reconciles affected wiki pages |
+| `/kb-query <q>` | Answers a question grounded in the wiki, optionally saves the answer under `wiki/queries/` |
+| `/kb-lint` | Static + semantic health check, fixes what's auto-fixable |
+| `/kb-status` | Sync + ingest stats |
+
+---
+
+## Session startup checklist
+
+When Claude opens a session in this KB:
+
+1. Read this `CLAUDE.md`.
+2. Read `wiki/index.md` to see what topics exist (skip if it doesn't exist yet — KB hasn't been ingested).
+3. Skim the last ~10 entries of `wiki/log.md` to understand recent operations.
+4. Check `.twitter-wiki/sync-meta.json` to see when the last sync ran. If it's been >7 days, suggest `/kb-sync`.
+5. Ask the user what they want to do, or wait for a slash command.
+
+Never assume — always check state before acting.
+
+---
+
+## What this KB is NOT
+
+- Not a personal journal — that's `notes/`.
+- Not a copy of every bookmark verbatim — it's synthesized insight, not an archive. The archive is `raw/bookmarks.jsonl`.
+- Not a domain-locked schema — topics emerge from what the user actually bookmarks. If their interests shift, `/kb-recluster`.
+- Not a blog or publication — it's a private working knowledge base, optimized for the user's future self.

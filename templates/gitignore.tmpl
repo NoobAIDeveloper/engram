@@ -1,0 +1,32 @@
+# twitter-wiki KB gitignore
+
+# Sync state and Claude-generated cluster map (regenerable)
+.twitter-wiki/sync-meta.json
+.twitter-wiki/cluster-map.yaml.bak
+.twitter-wiki/ingest-state.json
+
+# Obsidian workspace state (per-machine, don't share)
+.obsidian/workspace.json
+.obsidian/workspace-mobile.json
+.obsidian/cache
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Editor junk
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Python cache (if user runs scripts in-tree)
+__pycache__/
+*.pyc
+
+# By default, do NOT ignore the bookmarks JSONL or the cluster map itself —
+# users may want to back them up via git. If you'd rather keep your bookmarks
+# private, uncomment:
+# raw/bookmarks.jsonl
+# .twitter-wiki/cluster-map.yaml
