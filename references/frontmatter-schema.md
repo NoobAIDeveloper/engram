@@ -14,6 +14,7 @@ sources: [list of @handles or URLs]
 created: YYYY-MM-DD
 updated: YYYY-MM-DD
 tags: [list of kebab-case tags]
+private: true | false   # optional
 ---
 ```
 
@@ -37,6 +38,15 @@ tags: [list of kebab-case tags]
   `https://...`. Required on any page synthesized from bookmarks.
   Optional on `type: query` if the answer didn't cite specific
   sources, and on `type: stale`.
+
+### Optional: privacy
+
+- **private** (bool) — set to `true` on any page that incorporates
+  content from AI chat sources (`chatgpt`, `claude-ai`,
+  `claude-code`) or other sensitive sources. Any future
+  publish/share tooling must exclude pages marked `private: true`.
+  Pages synthesized purely from public posts may omit the field
+  (defaults to `false`).
 
 ## `type` values
 

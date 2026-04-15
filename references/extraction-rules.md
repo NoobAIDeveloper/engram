@@ -32,6 +32,20 @@ Every synthesized page has, in order:
 - **Attribute inline.** `@handle argues that X`, or `several authors
   (@a, @b, @c) converge on Y`. Don't make the reader guess who said
   what.
+- **AI chats use a different attribution format.** Items with
+  `source: chatgpt`, `source: claude-ai`, or `source: claude-code`
+  are conversations between the user and a model. Attribute as
+  `I asked ChatGPT about X; the answer held that Y`, or
+  `in a Claude Code session I worked through Z`. Never attribute an
+  AI-chat item to a public handle. Distinguish user intent (what I
+  asked) from model content (what the answer said) so the reader can
+  judge weight — the user's question signals interest, the model's
+  answer is not an external source of authority.
+- **Mixed-source pages:** if a page draws from both public tweets
+  and private chats, separate them in the Sources section under
+  distinct subheadings ("Public posts" / "My AI chats"), and mark
+  the page `private: true` in frontmatter so any future publish
+  tooling excludes it.
 - **Quote high-engagement tweets verbatim.** If a tweet has >1000
   likes, include a short direct quote (1–2 sentences) inside a
   blockquote with attribution. This rule is a hard invariant from
