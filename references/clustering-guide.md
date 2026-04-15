@@ -10,18 +10,33 @@ finance, derive finance topics. Don't assume a domain.
 
 ## Sampling
 
-Before deriving topics, sample `raw/bookmarks.jsonl` with diversity, not
-just the top N lines:
+Before deriving topics, sample `raw/items.jsonl` (falling back to
+`raw/bookmarks.jsonl` on legacy KBs) with diversity — not just the top N
+lines.
 
-- Aim for ~80 bookmarks total (cap at ~120 for very large corpora).
-- Spread across the full time range (`postedAt`): include oldest and
-  newest, not just recent.
-- Spread across distinct `authorHandle` values — don't let one prolific
-  author dominate.
-- Spread across distinct hashtags when present.
-- If the corpus is <200 bookmarks, just read all of them.
+**Per-source budget:** take **15% of each source**, clamped to [10, 200]
+per source. This matters because a mixed KB (X bookmarks + AI chats +
+GitHub stars + Kindle highlights) has very different content per source,
+and a fixed total sample biased toward the dominant source would miss
+topics in the others.
 
-Read the bookmark `text`, `authorHandle`, and hashtags. You do not need
+Worked example with three sources:
+- 2000 X bookmarks → 200 sampled (hit the 200 cap)
+- 400 ChatGPT Q+A → 60 sampled (15%)
+- 30 GitHub stars → 10 sampled (hit the 10 floor)
+- Total: 270 items across all sources.
+
+Within each source, diversify:
+
+- Spread across the full time range (`timestamp` / `postedAt`): include
+  oldest and newest, not just recent.
+- Spread across distinct `author` / `authorHandle` values — don't let one
+  prolific author dominate.
+- Spread across distinct hashtags (X) or `conversation_title` (AI chats)
+  when present.
+- If a source has fewer items than its lower bound, include them all.
+
+Read the item `text`, `source`, `author`, and any tags. You do not need
 engagement numbers for clustering.
 
 ## Deriving topics

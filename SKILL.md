@@ -50,7 +50,7 @@ The most important workflow. Never deviate from this order.
 
 1. **Bootstrap check.** If `.twitter-wiki/cluster-map.json` does NOT exist:
    - Load `@~/.claude/skills/twitter-wiki/references/clustering-guide.md`.
-   - Read a **diversified sample** of `raw/bookmarks.jsonl`: aim for ~80 bookmarks spread across the time range, across distinct authors, and across distinct hashtags. Don't just take the first 80.
+   - Read a **diversified sample** of `raw/items.jsonl` (or `raw/bookmarks.jsonl` on legacy KBs). Take 15% of each source, clamped to [10, 200] per source. This ensures multi-source KBs get topic coverage from every source, not just the dominant one. See `@~/.claude/skills/twitter-wiki/references/clustering-guide.md` for diversification rules within each source.
    - Derive **8–20 topics** that fit THIS user's actual content. Topics emerge from what's bookmarked — never from a generic preset. If the user bookmarks recipes, cooking topics; if they bookmark trades, finance topics; etc.
    - Write `.twitter-wiki/cluster-map.json`. Each topic entry: `name`, `description` (one line), `match` (keywords / hashtags / author handles / regex). See `@~/.claude/skills/twitter-wiki/references/clustering-guide.md` for format.
    - Briefly tell the user what topics you derived and why. Offer them a chance to tweak before proceeding (one round of edits, then move on).

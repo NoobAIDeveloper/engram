@@ -368,6 +368,16 @@ def main() -> int:
     for t in topics:
         write_batch(batch_dir / f"{t.name}.md", t, buckets[t.name])
     write_batch(batch_dir / "_unsorted.md", None, unsorted)
+    # Structured form of the unsorted bucket so a classifier (Haiku
+    # subagent via /kb-ingest) can consume items directly without
+    # re-parsing the markdown.
+    unsorted_jsonl = batch_dir / "_unsorted.jsonl"
+    if unsorted:
+        unsorted_jsonl.write_text(
+            "".join(json.dumps(it) + "\n" for it in unsorted)
+        )
+    elif unsorted_jsonl.exists():
+        unsorted_jsonl.unlink()
 
     generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
     counts = {name: len(bms) for name, bms in buckets.items()}

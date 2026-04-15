@@ -179,8 +179,8 @@ Implications:
 
 There is **no built-in topic list**. On first `/kb-ingest`:
 
-1. Claude samples ~80 bookmarks from your JSONL with diversity across time,
-   authors, and hashtags.
+1. Claude samples 15% of each source (clamped [10, 200] per source) from your
+   items corpus with diversity across time, authors, and hashtags.
 2. Claude derives 8–20 kebab-case topics from what it sees. If your bookmarks
    are mostly recipes, you get cooking topics. If they're mostly trades,
    finance topics. The skill is domain-agnostic.
