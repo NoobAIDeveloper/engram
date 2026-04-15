@@ -49,19 +49,22 @@ engagement numbers for clustering.
       "name": "topic-slug",
       "description": "One-line description of what belongs here.",
       "match": {
-        "keywords": ["case-insensitive substrings matched against tweet text"],
+        "keywords": ["case-insensitive substrings matched against item text"],
         "hashtags": ["hashtags without the #, case-insensitive"],
-        "authors":  ["handles without the @, case-insensitive"],
-        "regex":    ["Python regex patterns, case-insensitive"]
+        "authors":  ["handles/usernames without the @, case-insensitive"],
+        "regex":    ["Python regex patterns, case-insensitive"],
+        "sources":  ["optional source filter: e.g. ['x', 'claude-code']"]
       }
     }
   ]
 }
 ```
 
-All four `match` fields are optional; include only what you need. A
-bookmark matches the topic if **any** rule hits (OR semantics across
-rule types, OR across entries within a type).
+All five `match` fields are optional; include only what you need. An
+item matches the topic if **any** rule hits (OR semantics across rule
+types, OR across entries within a type). The `sources` field is an AND
+gate: if set, only items whose `source` is in the list are considered.
+Omit `sources` to match items from every source.
 
 ### Choosing rules
 

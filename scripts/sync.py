@@ -34,6 +34,8 @@ from graphql import (  # noqa: E402
     RateLimitError,
     fetch_bookmarks,
 )
+from sources.base import load_items, merge_items, write_items  # noqa: E402
+from sources.x import SOURCE_ID as X_SOURCE_ID, bookmarks_to_items  # noqa: E402
 
 
 def _kb_paths(kb: Path) -> tuple[Path, Path, Path]:
@@ -50,6 +52,29 @@ def _kb_paths(kb: Path) -> tuple[Path, Path, Path]:
     state_dir.mkdir(parents=True, exist_ok=True)
     raw_dir.mkdir(parents=True, exist_ok=True)
     return raw_dir / "bookmarks.jsonl", state_dir / "sync-meta.json", state_dir
+
+
+def _items_path(kb: Path) -> Path:
+    return kb.expanduser().resolve() / "raw" / "items.jsonl"
+
+
+def _rewrite_x_items(kb: Path, merged_bookmarks: list[dict]) -> int:
+    """Replace all x-sourced items in raw/items.jsonl with the merged X corpus.
+
+    Other sources' items in items.jsonl are preserved untouched. Returns the
+    number of X items now in the file.
+    """
+    items_path = _items_path(kb)
+    try:
+        existing = load_items(items_path)
+    except ValueError as exc:
+        print(f"warning: items.jsonl unreadable, rebuilding: {exc}", file=sys.stderr)
+        existing = []
+    non_x = [it for it in existing if it.get("source") != X_SOURCE_ID]
+    x_items = bookmarks_to_items(merged_bookmarks)
+    combined, _ = merge_items(non_x, x_items)
+    write_items(items_path, combined)
+    return len(x_items)
 
 
 def _load_jsonl(path: Path) -> list[dict]:
@@ -227,9 +252,13 @@ def sync(
         file=sys.stderr,
     )
 
-    # Persist
+    # Persist source-private bookmarks.jsonl (for X incremental sync)
     body = "\n".join(json.dumps(rec, ensure_ascii=False) for rec in merged) + "\n"
     _atomic_write(jsonl_path, body)
+
+    # Persist normalized items.jsonl (what preprocess reads)
+    x_item_count = _rewrite_x_items(kb, merged)
+    print(f"[sync] items.jsonl: {x_item_count} x-sourced items", file=sys.stderr)
 
     new_meta = {
         "provider": "twitter",

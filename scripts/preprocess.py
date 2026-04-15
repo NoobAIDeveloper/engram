@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 """
-Apply the cluster map to bookmarks and emit per-topic batch files.
+Apply the cluster map to the normalized item corpus and emit per-topic batches.
 
-Reads `<kb>/.twitter-wiki/cluster-map.json` and `<kb>/raw/bookmarks.jsonl`,
-matches each bookmark against every topic's rules (multi-assign — a single
-bookmark can land in more than one batch), and writes:
+Reads `<kb>/.twitter-wiki/cluster-map.json` and `<kb>/raw/items.jsonl` (falling
+back to the legacy `<kb>/raw/bookmarks.jsonl` for older KBs), matches each
+item against every topic's rules (multi-assign — a single item can land in
+more than one batch), and writes:
 
     <kb>/raw/bookmarks/<topic>.md      one markdown file per topic
-    <kb>/raw/bookmarks/_unsorted.md    bookmarks that matched no topic
+    <kb>/raw/bookmarks/_unsorted.md    items that matched no topic
     <kb>/raw/bookmarks/_manifest.md    index with counts
 
 Claude generates cluster-map.json on first ingest by sampling the user's
-actual bookmarks. This script is the deterministic applier — it never
-invents topics, it just routes.
+actual items. This script is the deterministic applier — it never invents
+topics, it just routes.
 
 Usage:
     python3 scripts/preprocess.py --kb <kb-path>
@@ -40,6 +41,7 @@ class Topic:
     hashtags: list[str] = field(default_factory=list)
     authors: list[str] = field(default_factory=list)
     regexes: list[re.Pattern[str]] = field(default_factory=list)
+    sources: list[str] = field(default_factory=list)  # empty = all sources
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "Topic":
@@ -62,13 +64,22 @@ class Topic:
             hashtags=[h.lstrip("#").lower() for h in (match.get("hashtags") or [])],
             authors=[a.lstrip("@").lower() for a in (match.get("authors") or [])],
             regexes=patterns,
+            sources=[s.lower() for s in (match.get("sources") or [])],
         )
 
-    def matches(self, bm: dict[str, Any]) -> bool:
-        text = (bm.get("text") or "").lower()
-        handle = (bm.get("authorHandle") or "").lstrip("@").lower()
+    def matches(self, item: dict[str, Any]) -> bool:
+        # Accept both normalized Item dicts (fields: text/author/source) and
+        # legacy X bookmark dicts (fields: text/authorHandle) so preprocess
+        # still works on KBs that haven't been re-synced after the refactor.
+        source = (item.get("source") or "x").lower()
+        if self.sources and source not in self.sources:
+            return False
 
-        if self.authors and handle in self.authors:
+        text = (item.get("text") or "").lower()
+        author = (item.get("author") or item.get("authorHandle") or "")
+        author = author.lstrip("@").lower()
+
+        if self.authors and author in self.authors:
             return True
         if self.keywords and any(kw in text for kw in self.keywords):
             return True
@@ -112,14 +123,16 @@ def _fmt_count(n: int | None) -> str:
     return str(n)
 
 
-def render_bookmark(bm: dict[str, Any]) -> str:
-    handle = bm.get("authorHandle") or "unknown"
-    name = bm.get("authorName") or handle
-    posted = bm.get("postedAt") or ""
-    url = bm.get("url") or ""
-    text = (bm.get("text") or "").strip()
+def _render_x(item: dict[str, Any]) -> str:
+    # Supports both normalized Items and legacy bookmark dicts.
+    meta = item.get("metadata") or {}
+    handle = item.get("author") or item.get("authorHandle") or "unknown"
+    name = meta.get("authorName") or item.get("authorName") or handle
+    posted = item.get("timestamp") or item.get("postedAt") or ""
+    url = item.get("url") or ""
+    text = (item.get("text") or "").strip()
 
-    eng = bm.get("engagement") or {}
+    eng = item.get("engagement") or {}
     likes = _fmt_count(eng.get("likeCount"))
     reposts = _fmt_count(eng.get("repostCount"))
     replies = _fmt_count(eng.get("replyCount"))
@@ -131,14 +144,14 @@ def render_bookmark(bm: dict[str, Any]) -> str:
         f"- engagement: {likes} likes · {reposts} reposts · {replies} replies",
     ]
 
-    media = bm.get("media") or []
+    media = item.get("media") or []
     if media:
         lines.append(f"- media: {len(media)} item(s)")
-    links = bm.get("links") or []
+    links = meta.get("links") or item.get("links") or []
     if links:
         lines.append("- links: " + ", ".join(links[:5]))
 
-    quoted = bm.get("quotedTweet")
+    quoted = meta.get("quotedTweet") or item.get("quotedTweet")
     if quoted:
         q_handle = quoted.get("authorHandle") or "unknown"
         q_text = (quoted.get("text") or "").strip().replace("\n", " ")
@@ -154,8 +167,48 @@ def render_bookmark(bm: dict[str, Any]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def _render_generic(item: dict[str, Any]) -> str:
+    source = item.get("source") or "unknown"
+    author = item.get("author")
+    header = f"### [{source}]"
+    if author:
+        header += f" @{author}"
+    ts = item.get("timestamp") or ""
+    url = item.get("url") or ""
+
+    lines = [header]
+    if ts:
+        lines.append(f"- at: {ts}")
+    if url:
+        lines.append(f"- url: {url}")
+    meta = item.get("metadata") or {}
+    for k in ("conversation_id", "book_title", "repo", "folder"):
+        if k in meta:
+            lines.append(f"- {k}: {meta[k]}")
+
+    text = (item.get("text") or "").strip()
+    lines.append("")
+    if text:
+        for line in text.splitlines():
+            lines.append(f"> {line}" if line else ">")
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def render_item(item: dict[str, Any]) -> str:
+    source = (item.get("source") or "x").lower()
+    if source == "x":
+        return _render_x(item)
+    return _render_generic(item)
+
+
+# Legacy alias — preserved for any external callers.
+def render_bookmark(bm: dict[str, Any]) -> str:
+    return _render_x(bm)
+
+
 def write_batch(
-    path: Path, topic: Topic | None, bookmarks: list[dict[str, Any]]
+    path: Path, topic: Topic | None, items: list[dict[str, Any]]
 ) -> None:
     if topic is not None:
         header = [f"# {topic.name}", ""]
@@ -165,18 +218,26 @@ def write_batch(
         header = [
             "# _unsorted",
             "",
-            "Bookmarks that matched no topic in cluster-map.json. Add a rule "
+            "Items that matched no topic in cluster-map.json. Add a rule "
             "(or a new topic) and re-run preprocess to route them.",
             "",
         ]
+    # Show source breakdown so Claude can see at a glance what's in each batch.
+    source_counts: dict[str, int] = {}
+    for it in items:
+        s = (it.get("source") or "x").lower()
+        source_counts[s] = source_counts.get(s, 0) + 1
+    source_summary = ", ".join(
+        f"{s}: {c}" for s, c in sorted(source_counts.items())
+    ) or "empty"
     header += [
-        f"Generated by preprocess.py · {len(bookmarks)} bookmark(s).",
+        f"Generated by preprocess.py · {len(items)} item(s) ({source_summary}).",
         "Do not hand-edit — regenerated on every preprocess run.",
         "",
         "---",
         "",
     ]
-    body = "\n".join(render_bookmark(bm) for bm in bookmarks)
+    body = "\n".join(render_item(it) for it in items)
     path.write_text("\n".join(header) + body)
 
 
@@ -187,14 +248,22 @@ def write_manifest(
     unsorted_count: int,
     total: int,
     generated_at: str,
+    source_counts: dict[str, int] | None = None,
 ) -> None:
     lines = [
-        "# Bookmark batch manifest",
+        "# Item batch manifest",
         "",
         f"Generated: {generated_at}",
-        f"Total bookmarks: {total}",
+        f"Total items: {total}",
+    ]
+    if source_counts:
+        summary = ", ".join(
+            f"{s}: {c}" for s, c in sorted(source_counts.items())
+        )
+        lines.append(f"Sources: {summary}")
+    lines += [
         "",
-        "| Topic | Bookmarks | Description |",
+        "| Topic | Items | Description |",
         "|---|---:|---|",
     ]
     for t in topics:
@@ -205,6 +274,39 @@ def write_manifest(
 
 # ---- main -------------------------------------------------------------------
 
+def load_items_or_bookmarks(kb: Path) -> list[dict[str, Any]]:
+    """Prefer raw/items.jsonl (normalized, multi-source). Fall back to
+    raw/bookmarks.jsonl for KBs synced before the Item refactor — those
+    legacy dicts still work because matches() and render_item() accept
+    either shape."""
+    items_path = kb / "raw" / "items.jsonl"
+    legacy_path = kb / "raw" / "bookmarks.jsonl"
+
+    def _read(path: Path, label: str) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for i, line in enumerate(path.read_text().split("\n"), 1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                out.append(json.loads(line))
+            except json.JSONDecodeError as e:
+                sys.exit(f"error: {label} line {i}: {e}")
+        return out
+
+    if items_path.exists():
+        return _read(items_path, "items.jsonl")
+    if legacy_path.exists():
+        print(
+            "note: reading legacy raw/bookmarks.jsonl. Re-run /kb-sync "
+            "to regenerate raw/items.jsonl in the new format.",
+            file=sys.stderr,
+        )
+        return _read(legacy_path, "bookmarks.jsonl")
+    sys.exit(f"error: neither {items_path} nor {legacy_path} found. Run sync.py first.")
+
+
+# Kept for backward compatibility with external imports.
 def load_bookmarks(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         sys.exit(f"error: {path} not found. Run sync.py first.")
@@ -216,7 +318,7 @@ def load_bookmarks(path: Path) -> list[dict[str, Any]]:
         try:
             out.append(json.loads(line))
         except json.JSONDecodeError as e:
-            sys.exit(f"error: bookmarks.jsonl line {i}: {e}")
+            sys.exit(f"error: {path.name} line {i}: {e}")
     return out
 
 
@@ -237,23 +339,22 @@ def main() -> int:
 
     kb: Path = args.kb.resolve()
     map_path = kb / ".twitter-wiki" / "cluster-map.json"
-    jsonl_path = kb / "raw" / "bookmarks.jsonl"
     batch_dir = kb / "raw" / "bookmarks"
 
     topics = load_cluster_map(map_path)
-    bookmarks = load_bookmarks(jsonl_path)
+    items = load_items_or_bookmarks(kb)
 
     buckets: dict[str, list[dict[str, Any]]] = {t.name: [] for t in topics}
     unsorted: list[dict[str, Any]] = []
 
-    for bm in bookmarks:
+    for it in items:
         hit = False
         for t in topics:
-            if t.matches(bm):
-                buckets[t.name].append(bm)
+            if t.matches(it):
+                buckets[t.name].append(it)
                 hit = True
         if not hit:
-            unsorted.append(bm)
+            unsorted.append(it)
 
     clean_batch_dir(batch_dir)
     for t in topics:
@@ -262,19 +363,27 @@ def main() -> int:
 
     generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
     counts = {name: len(bms) for name, bms in buckets.items()}
+    source_counts: dict[str, int] = {}
+    for it in items:
+        s = (it.get("source") or "x").lower()
+        source_counts[s] = source_counts.get(s, 0) + 1
     write_manifest(
         batch_dir / "_manifest.md",
         topics,
         counts,
         unsorted_count=len(unsorted),
-        total=len(bookmarks),
+        total=len(items),
         generated_at=generated_at,
+        source_counts=source_counts,
     )
 
-    print(f"preprocessed {len(bookmarks)} bookmarks into {len(topics)} topic(s)")
+    print(f"preprocessed {len(items)} item(s) into {len(topics)} topic(s)")
     for t in topics:
         print(f"  {t.name}: {counts[t.name]}")
     print(f"  _unsorted: {len(unsorted)}")
+    if source_counts:
+        src_summary = ", ".join(f"{s}: {c}" for s, c in sorted(source_counts.items()))
+        print(f"  sources: {src_summary}")
     return 0
 
 
