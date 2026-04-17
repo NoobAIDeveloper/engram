@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Self-bootstrapping Python runner for the engram plugin.
+# Automatically creates a venv and installs dependencies on first use.
+#
+# Usage: engram-py <script-path-relative-to-plugin-root> [args...]
+# Example: engram-py scripts/sync.py --kb /path/to/kb
+
+set -euo pipefail
+
+PLUGIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+VENV="$PLUGIN_ROOT/.venv"
+SCRIPT="$1"
+shift
+
+# Auto-bootstrap venv on first run
+if [ ! -d "$VENV" ]; then
+  echo "engram: setting up Python environment (one-time)..." >&2
+  python3 -m venv "$VENV"
+  "$VENV/bin/pip" install --quiet --upgrade pip
+  "$VENV/bin/pip" install --quiet "cryptography>=42"
+  echo "engram: ready." >&2
+fi
+
+# Resolve script path relative to plugin root
+if [[ "$SCRIPT" != /* ]]; then
+  SCRIPT="$PLUGIN_ROOT/$SCRIPT"
+fi
+
+exec "$VENV/bin/python" "$SCRIPT" "$@"

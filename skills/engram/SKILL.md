@@ -1,13 +1,37 @@
 ---
-name: twitter-wiki
-description: Manage a personal knowledge base built from a user's Twitter/X bookmarks, ChatGPT and Claude.ai conversation history, Claude Code sessions, browser bookmarks, GitHub stars, and Kindle highlights. Sync from logged-in browser sessions, cluster by topic, and synthesize an interlinked Obsidian wiki. Activate when the user is in a twitter-wiki KB directory (one with a CLAUDE.md that names this skill, or with a `.twitter-wiki/` subdirectory) or asks to sync, ingest, query, lint, recluster, or otherwise work with their wiki.
+name: engram
+description: Manage a personal knowledge base built from a user's Twitter/X bookmarks, ChatGPT and Claude.ai conversation history, Claude Code sessions, browser bookmarks, GitHub stars, and Kindle highlights. Sync from logged-in browser sessions, cluster by topic, and synthesize an interlinked Obsidian wiki. Activate when the user is in an engram KB directory (one with a CLAUDE.md that names this skill, or with a `.engram/` subdirectory) or asks to sync, ingest, query, lint, recluster, or otherwise work with their wiki.
 ---
 
-# twitter-wiki
+# engram
 
 You are operating a personal knowledge base built from a user's Twitter/X bookmarks. Bookmarks are stored as JSONL on disk. A deterministic Python script clusters them into topic batches using a YAML map that **you** generate from the user's actual content. You then synthesize each batch into a wiki page (frontmatter + TLDR + body + counter-arguments + wikilinks) inside an Obsidian vault.
 
 The scripts handle the mechanical work (auth, fetching, clustering, lint checks, stats). You handle judgment: classifying topics, synthesizing insights, writing prose, fixing semantic issues.
+
+## Plugin setup
+
+This skill ships as a Claude Code plugin. On first use, ensure the plugin is linked and the Python venv exists:
+
+```bash
+# Link the plugin (one-time — skip if ~/.claude/skills/engram already exists)
+if [ ! -e "$HOME/.claude/skills/engram" ]; then
+  INSTALL_PATH=$(python3 -c "import json,pathlib;print(next(p['installPath'] for p in json.loads(pathlib.Path('~/.claude/plugins/installed_plugins.json').expanduser().read_text()) if 'engram' in p['id']))" 2>/dev/null)
+  if [ -n "$INSTALL_PATH" ]; then
+    mkdir -p ~/.claude/skills
+    ln -sf "$INSTALL_PATH" ~/.claude/skills/engram
+  fi
+fi
+# Bootstrap Python venv (one-time)
+if [ ! -d "$HOME/.claude/skills/engram/.venv" ]; then
+  cd ~/.claude/skills/engram
+  python3 -m venv .venv
+  .venv/bin/pip install -q --upgrade pip
+  .venv/bin/pip install -q "cryptography>=42"
+fi
+```
+
+After this, all scripts are accessible via `~/.claude/skills/engram/`.
 
 ## Where things live
 
@@ -21,14 +45,14 @@ The user's KB directory:
 - `wiki/queries/` — saved query-result pages (created by `/kb-query` when answers are worth keeping).
 - `notes/` — **user-only.** You NEVER read this directory. You NEVER write to it.
 - `CLAUDE.md` — KB-level config & rules. Loaded automatically.
-- `.twitter-wiki/cluster-map.json` — topic → match rules. **You generate this on first ingest.**
-- `.twitter-wiki/sync-meta.json` — sync state. Owned by `sync.py`. Don't hand-edit.
-- `.twitter-wiki/ingest-state.json` — tracks which clusters have been synthesized. Owned by you (you update it during ingest).
+- `.engram/cluster-map.json` — topic → match rules. **You generate this on first ingest.**
+- `.engram/sync-meta.json` — sync state. Owned by `sync.py`. Don't hand-edit.
+- `.engram/ingest-state.json` — tracks which clusters have been synthesized. Owned by you (you update it during ingest).
 
 The skill itself (read-only reference material):
-- `~/.claude/skills/twitter-wiki/scripts/*.py` — bundled Python scripts. Invoke via `~/.claude/skills/twitter-wiki/.venv/bin/python <script> --kb $(pwd)` (the venv ships with required deps).
-- `~/.claude/skills/twitter-wiki/references/*.md` — verbose specs you load on demand via `@references/...`
-- `~/.claude/skills/twitter-wiki/templates/CLAUDE.md.tmpl` — KB template used by init
+- `~/.claude/skills/engram/scripts/*.py` — bundled Python scripts. Invoke via `~/.claude/skills/engram/.venv/bin/python <script> --kb $(pwd)` (the venv ships with required deps).
+- `~/.claude/skills/engram/references/*.md` — verbose specs you load on demand via `@references/...`
+- `~/.claude/skills/engram/templates/CLAUDE.md.tmpl` — KB template used by init
 
 ## Operations
 
@@ -48,24 +72,24 @@ These slash commands live in `~/.claude/commands/kb-*.md` and each one delegates
 
 The most important workflow. Never deviate from this order.
 
-1. **Bootstrap check.** If `.twitter-wiki/cluster-map.json` does NOT exist:
-   - Load `@~/.claude/skills/twitter-wiki/references/clustering-guide.md`.
-   - Read a **diversified sample** of `raw/items.jsonl` (or `raw/bookmarks.jsonl` on legacy KBs). Take 15% of each source, clamped to [10, 200] per source. This ensures multi-source KBs get topic coverage from every source, not just the dominant one. See `@~/.claude/skills/twitter-wiki/references/clustering-guide.md` for diversification rules within each source.
+1. **Bootstrap check.** If `.engram/cluster-map.json` does NOT exist:
+   - Load `@~/.claude/skills/engram/references/clustering-guide.md`.
+   - Read a **diversified sample** of `raw/items.jsonl` (or `raw/bookmarks.jsonl` on legacy KBs). Take 15% of each source, clamped to [10, 200] per source. This ensures multi-source KBs get topic coverage from every source, not just the dominant one. See `@~/.claude/skills/engram/references/clustering-guide.md` for diversification rules within each source.
    - Derive **8–20 topics** that fit THIS user's actual content. Topics emerge from what's bookmarked — never from a generic preset. If the user bookmarks recipes, cooking topics; if they bookmark trades, finance topics; etc.
-   - Write `.twitter-wiki/cluster-map.json`. Each topic entry: `name`, `description` (one line), `match` (keywords / hashtags / author handles / regex). See `@~/.claude/skills/twitter-wiki/references/clustering-guide.md` for format.
+   - Write `.engram/cluster-map.json`. Each topic entry: `name`, `description` (one line), `match` (keywords / hashtags / author handles / regex). See `@~/.claude/skills/engram/references/clustering-guide.md` for format.
    - Briefly tell the user what topics you derived and why. Offer them a chance to tweak before proceeding (one round of edits, then move on).
 
-2. **Run preprocess.** `~/.claude/skills/twitter-wiki/.venv/bin/python ~/.claude/skills/twitter-wiki/scripts/preprocess.py --kb $(pwd)`. This writes `raw/bookmarks/<topic>.md` files and `_manifest.md`. Bookmarks matching nothing land in `_unsorted.md`.
+2. **Run preprocess.** `~/.claude/skills/engram/.venv/bin/python ~/.claude/skills/engram/scripts/preprocess.py --kb $(pwd)`. This writes `raw/bookmarks/<topic>.md` files and `_manifest.md`. Bookmarks matching nothing land in `_unsorted.md`.
 
 3. **Read existing state.**
    - Read `wiki/index.md` (or note it doesn't exist yet).
-   - Read `.twitter-wiki/ingest-state.json` to know which batches were already synthesized at which sizes.
+   - Read `.engram/ingest-state.json` to know which batches were already synthesized at which sizes.
 
 4. **For each topic batch in `raw/bookmarks/`:**
    - Skip `_manifest.md` and `_unsorted.md` (the unsorted file is for your awareness, not synthesis).
    - If the batch is new OR has grown since last ingest, synthesize/update `wiki/<topic>.md`.
-   - Follow `@~/.claude/skills/twitter-wiki/references/extraction-rules.md` for the synthesis approach.
-   - Required structure (see `@~/.claude/skills/twitter-wiki/references/frontmatter-schema.md`):
+   - Follow `@~/.claude/skills/engram/references/extraction-rules.md` for the synthesis approach.
+   - Required structure (see `@~/.claude/skills/engram/references/frontmatter-schema.md`):
      - YAML frontmatter (title, type, sources, created, updated, tags)
      - **TLDR** section (3–5 sentence high-density summary)
      - Body grouped by sub-theme, with author attributions and short quotes for high-engagement tweets (>1000 likes)
@@ -76,7 +100,7 @@ The most important workflow. Never deviate from this order.
 
 6. **Append to `wiki/log.md`** under today's date: an `ingest-batch` entry per processed topic with bookmark count.
 
-7. **Update `.twitter-wiki/ingest-state.json`** with the sizes you just synthesized at.
+7. **Update `.engram/ingest-state.json`** with the sizes you just synthesized at.
 
 8. **Report back to the user**: what was created/updated, what's still pending, any anomalies.
 
@@ -84,7 +108,7 @@ The most important workflow. Never deviate from this order.
 
 When the user runs `/kb-recluster` (optionally with a natural-language hint like "merge two topics" or "split out finance from business"):
 
-1. Back up the existing map: `cp .twitter-wiki/cluster-map.json .twitter-wiki/cluster-map.json.bak`.
+1. Back up the existing map: `cp .engram/cluster-map.json .engram/cluster-map.json.bak`.
 2. Read the current `cluster-map.json`, current `_manifest.md`, and `wiki/index.md`.
 3. Re-sample bookmarks (the corpus is likely much larger than at bootstrap time). Same diversity rules.
 4. Apply the user's hint if any. Otherwise look for: topics that grew much larger than others (split candidates), topics that became near-duplicates (merge candidates), topics with <5 bookmarks (collapse candidates), unsorted bookmarks that suggest a missing topic.
@@ -109,7 +133,7 @@ When the user asks a question via `/kb-query` (or natural language):
 
 ## Lint workflow
 
-1. Run `~/.claude/skills/twitter-wiki/.venv/bin/python ~/.claude/skills/twitter-wiki/scripts/lint.py --kb $(pwd)`. It returns a structured report of issues (missing frontmatter, missing TLDR, missing counter-args on concept pages, broken wikilinks, orphan pages, stale pages).
+1. Run `~/.claude/skills/engram/.venv/bin/python ~/.claude/skills/engram/scripts/lint.py --kb $(pwd)`. It returns a structured report of issues (missing frontmatter, missing TLDR, missing counter-args on concept pages, broken wikilinks, orphan pages, stale pages).
 2. For each issue, decide: can you fix it autonomously? If yes, fix it. If no (e.g. requires content judgment beyond what's in the existing pages), report it to the user.
 3. Append to `wiki/log.md` under `lint`.
 
@@ -129,7 +153,7 @@ When the user asks a question via `/kb-query` (or natural language):
 
 ## Sync workflow
 
-1. Run `~/.claude/skills/twitter-wiki/.venv/bin/python ~/.claude/skills/twitter-wiki/scripts/sync.py --kb $(pwd) [--source <name>]`. Default source is `x`. Source adapters handle their own cookie extraction, pagination, and dedupe; outputs land in `raw/items.jsonl` (or `raw/bookmarks.jsonl` for `x`) with `.twitter-wiki/<source>-sync-meta.json` cursors.
+1. Run `~/.claude/skills/engram/.venv/bin/python ~/.claude/skills/engram/scripts/sync.py --kb $(pwd) [--source <name>]`. Default source is `x`. Source adapters handle their own cookie extraction, pagination, and dedupe; outputs land in `raw/items.jsonl` (or `raw/bookmarks.jsonl` for `x`) with `.engram/<source>-sync-meta.json` cursors.
 2. Report new item count.
 3. If new items were added, suggest `/kb-ingest`.
 4. If sync failed with auth error, tell the user to re-login in the browser for that source.
@@ -142,10 +166,18 @@ When the user asks a question via `/kb-query` (or natural language):
 - **Wikilinks use `[[double-brackets]]`.** External links use markdown `[text](url)`.
 - **Topics emerge from the user's actual bookmarks.** Never assume a domain. Never hardcode topic categories. Re-derive from content every time.
 - **Preprocess never runs without `cluster-map.json`.** If it's missing, bootstrap it first by reading bookmarks and writing the map.
-- **Sync state files in `.twitter-wiki/` are owned by scripts.** Don't hand-edit `sync-meta.json`. You may edit `cluster-map.json` (you generated it) and `ingest-state.json` (you maintain it).
+- **Sync state files in `.engram/` are owned by scripts.** Don't hand-edit `sync-meta.json`. You may edit `cluster-map.json` (you generated it) and `ingest-state.json` (you maintain it).
 - **High-engagement tweets get direct quotes.** If a tweet has >1000 likes, include a short verbatim quote (with attribution) in the wiki page rather than just paraphrasing.
 - **Don't ingest into a wiki page if the source batch hasn't changed.** Check `ingest-state.json` first. Avoid redundant LLM work.
 
+## Backward compatibility
+
+If you encounter a KB with a `.twitter-wiki/` directory (the old name), migrate it:
+```bash
+mv .twitter-wiki .engram
+```
+Then proceed normally. This is a one-time migration — the old name is no longer used.
+
 ## On context efficiency
 
-This SKILL.md is loaded into your context whenever you operate on a twitter-wiki KB. Detailed schemas, taxonomies, and rule sets live in `references/*.md` and are loaded only when you actually need them. When you're doing a small operation like `/kb-status`, do NOT pull in the references — they're not needed. When you're doing `/kb-ingest`, load `extraction-rules.md`, `frontmatter-schema.md`, and (on bootstrap) `clustering-guide.md`, and nothing else.
+This SKILL.md is loaded into your context whenever you operate on an engram KB. Detailed schemas, taxonomies, and rule sets live in `references/*.md` and are loaded only when you actually need them. When you're doing a small operation like `/kb-status`, do NOT pull in the references — they're not needed. When you're doing `/kb-ingest`, load `extraction-rules.md`, `frontmatter-schema.md`, and (on bootstrap) `clustering-guide.md`, and nothing else.

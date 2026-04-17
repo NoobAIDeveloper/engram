@@ -10,7 +10,7 @@ Sidechain messages (subagent conversations), tool_result messages, and
 file-history snapshots are skipped — they're not user-authored knowledge.
 
 The KB's own Claude Code sessions are skipped by default so a wiki about
-"my twitter-wiki work" doesn't pollute itself with self-references. Override
+"my engram work" doesn't pollute itself with self-references. Override
 with include_self=True if desired.
 """
 
@@ -80,8 +80,8 @@ def _iter_session_files(skip_paths: Iterable[Path] = ()) -> Iterable[Path]:
 
 
 def _project_label(session_path: Path) -> str:
-    # ~/.claude/projects/-Users-bharat-Projects-twitter-wiki/<uuid>.jsonl
-    # → "twitter-wiki" (last path component of the original cwd).
+    # ~/.claude/projects/-Users-bharat-Projects-engram/<uuid>.jsonl
+    # → "engram" (last path component of the original cwd).
     folder = session_path.parent.name
     if folder.startswith("-"):
         folder = folder[1:]

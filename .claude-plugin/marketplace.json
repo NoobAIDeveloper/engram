@@ -1,0 +1,26 @@
+{
+  "name": "engram",
+  "owner": {
+    "name": "Bharat Jaju",
+    "email": "jajoo1997@gmail.com"
+  },
+  "metadata": {
+    "description": "Personal knowledge base — sync bookmarks, AI chats, and highlights into an Obsidian wiki",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "engram",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/NoobAIDeveloper/engram.git"
+      },
+      "description": "Turn your Twitter/X bookmarks, AI chat history, browser bookmarks, GitHub stars, and Kindle highlights into a living Obsidian wiki.",
+      "version": "1.0.0",
+      "author": {
+        "name": "Bharat Jaju"
+      },
+      "homepage": "https://github.com/NoobAIDeveloper/engram"
+    }
+  ]
+}

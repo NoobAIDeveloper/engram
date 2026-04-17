@@ -1,7 +1,7 @@
 # Clustering guide
 
 Loaded on first ingest and on `/kb-recluster`. The goal is to produce
-`.twitter-wiki/cluster-map.json` — a deterministic routing map that
+`.engram/cluster-map.json` — a deterministic routing map that
 `preprocess.py` applies to the bookmarks.
 
 Topics emerge from **this user's actual bookmarks**. Never from a preset.

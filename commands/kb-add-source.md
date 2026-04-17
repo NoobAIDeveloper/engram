@@ -9,7 +9,7 @@ The current working directory should be a KB (contain `CLAUDE.md`). If not, tell
 
 ## How to configure each source
 
-Read `$(pwd)/.twitter-wiki/sources.json` (create if missing, JSON object root). Add the relevant block, then commit with an atomic write.
+Read `$(pwd)/.engram/sources.json` (create if missing, JSON object root). Add the relevant block, then commit with an atomic write.
 
 ### `github-stars`
 Ask the user for their GitHub handle if `$ARGUMENTS` didn't include one. Merge into `sources.json`:

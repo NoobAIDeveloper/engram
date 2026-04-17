@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Lint a twitter-wiki KB.
+Lint a engram KB.
 
 Scans `<kb>/wiki/**/*.md` and reports issues: missing or malformed
 frontmatter, bad `type` values, invalid dates, non-kebab-case tags or
@@ -211,7 +211,7 @@ def collect_wiki_pages(wiki_dir: Path) -> list[Path]:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Lint a twitter-wiki KB.")
+    ap = argparse.ArgumentParser(description="Lint a engram KB.")
     ap.add_argument("--kb", required=True, type=Path)
     ap.add_argument("--json", action="store_true", help="emit JSON instead of text")
     args = ap.parse_args()

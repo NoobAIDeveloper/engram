@@ -320,7 +320,7 @@ def sync(
     one with update_time <= the last-seen value in chatgpt-sync-meta.json.
     Pass full=True to re-fetch everything.
     """
-    state_dir = kb_dir / ".twitter-wiki"
+    state_dir = kb_dir / ".engram"
     state_dir.mkdir(parents=True, exist_ok=True)
     meta_path = state_dir / "chatgpt-sync-meta.json"
 

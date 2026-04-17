@@ -20,7 +20,7 @@ Use the `CronCreate` tool with:
 - **schedule** as the cron expression derived above.
 - **name** like `personal-wiki autosync: <kb-folder-name>`.
 
-Record what was scheduled in `<kb>/.twitter-wiki/autosync.json`:
+Record what was scheduled in `<kb>/.engram/autosync.json`:
 
 ```json
 {"cron_id": "<id-from-CronCreate>", "schedule": "<cron-expr>", "sources": "<sources>", "kb": "<abs-path>"}

@@ -7,7 +7,7 @@ https://github.com/afar1/fieldtheory-cli/blob/main/src/graphql-bookmarks.ts
 
 This calls the same `Bookmarks` GraphQL endpoint that the X.com web client
 uses, paginates through all of the authenticated user's bookmarks, and yields
-bookmark dicts that conform to the twitter-wiki canonical schema.
+bookmark dicts that conform to the engram canonical schema.
 
 Usage:
     python3 scripts/graphql.py --ct0 <ct0> --auth-token <auth_token> [--max-pages N]
@@ -347,7 +347,7 @@ def convert_tweet_to_record(
 
     Returns None if the entry is missing critical fields (legacy/id).
     Missing fields are defaulted to empty string / empty list / 0 / False
-    so the output always conforms to the twitter-wiki schema.
+    so the output always conforms to the engram schema.
     """
     tweet = _unwrap_tweet(tweet_result)
     legacy = _get(tweet, "legacy")
@@ -577,7 +577,7 @@ class FetchOptions:
 
 def fetch_bookmarks(opts: FetchOptions) -> Iterator[dict]:
     """
-    Yield bookmark dicts (matching the twitter-wiki canonical schema)
+    Yield bookmark dicts (matching the engram canonical schema)
     page by page, using X's internal `Bookmarks` GraphQL endpoint.
 
     Handles:

@@ -9,7 +9,7 @@ All issues below are reproducible from a clean state.
 
 | Source | Items | Notes |
 |---|---|---|
-| `init.py` scaffold | — | Creates `CLAUDE.md`, `.twitter-wiki/`, `wiki/`, `notes/`, `raw/bookmarks/` cleanly. |
+| `init.py` scaffold | — | Creates `CLAUDE.md`, `.engram/`, `wiki/`, `notes/`, `raw/bookmarks/` cleanly. |
 | `--source x` | 1063 bookmarks | Cookies extracted from Brave; full sync OK. |
 | `--source claude-code` | 177 Q+A pairs | Walks `~/.claude/projects/`, dedupes by folder+session. |
 | `--source browser-bookmarks` | 38 URLs | Reads Chrome/Brave/Edge JSON. |

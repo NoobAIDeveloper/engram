@@ -8,6 +8,7 @@ __pycache__/
 # clones or runs the skill from inside this repo.
 raw/
 *.jsonl
+.engram/
 .twitter-wiki/
 .personal-wiki/
 .claude/

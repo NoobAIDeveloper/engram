@@ -6,7 +6,7 @@ Hits the public `GET /users/{user}/starred` endpoint (no auth required for
 public stars) and emits one Item per starred repo.
 
 Configuration: the user's GitHub handle is read from
-`<kb>/.twitter-wiki/sources.json` under the key `github.handle`. If that
+`<kb>/.engram/sources.json` under the key `github.handle`. If that
 file doesn't exist or doesn't specify a handle, this adapter is a no-op.
 """
 
@@ -28,7 +28,7 @@ PAGE_SIZE = 100
 
 
 def _load_handle(kb_dir: Path) -> str | None:
-    cfg = kb_dir / ".twitter-wiki" / "sources.json"
+    cfg = kb_dir / ".engram" / "sources.json"
     if not cfg.exists():
         return None
     try:

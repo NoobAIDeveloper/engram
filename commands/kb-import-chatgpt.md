@@ -14,7 +14,7 @@ The current working directory should be a KB (contain `CLAUDE.md`). If not, tell
 Run:
 
 ```bash
-~/.claude/skills/twitter-wiki/.venv/bin/python ~/.claude/skills/twitter-wiki/scripts/import_export.py \
+~/.claude/skills/engram/.venv/bin/python ~/.claude/skills/engram/scripts/import_export.py \
   --kb $(pwd) --provider chatgpt --zip $ARGUMENTS
 ```
 

@@ -2,7 +2,7 @@
 """
 Apply the cluster map to the normalized item corpus and emit per-topic batches.
 
-Reads `<kb>/.twitter-wiki/cluster-map.json` and `<kb>/raw/items.jsonl` (falling
+Reads `<kb>/.engram/cluster-map.json` and `<kb>/raw/items.jsonl` (falling
 back to the legacy `<kb>/raw/bookmarks.jsonl` for older KBs), matches each
 item against every topic's rules (multi-assign — a single item can land in
 more than one batch), and writes:
@@ -346,7 +346,7 @@ def main() -> int:
     args = ap.parse_args()
 
     kb: Path = args.kb.resolve()
-    map_path = kb / ".twitter-wiki" / "cluster-map.json"
+    map_path = kb / ".engram" / "cluster-map.json"
     batch_dir = kb / "raw" / "bookmarks"
 
     topics = load_cluster_map(map_path)

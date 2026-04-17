@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Sync Twitter/X bookmarks into a twitter-wiki KB.
+Sync Twitter/X bookmarks into an engram KB.
 
-Reads existing `<kb>/raw/bookmarks.jsonl` and `<kb>/.twitter-wiki/sync-meta.json`,
+Reads existing `<kb>/raw/bookmarks.jsonl` and `<kb>/.engram/sync-meta.json`,
 extracts the user's logged-in cookies from a Chromium-family browser, paginates
 the X bookmarks GraphQL endpoint until it hits the newest already-known bookmark
 (or runs out of pages), merges new records into the JSONL deduped by id, and
@@ -36,11 +36,11 @@ def _kb_paths(kb: Path) -> tuple[Path, Path, Path]:
     kb = kb.expanduser().resolve()
     if not (kb / "CLAUDE.md").exists():
         print(
-            f"warning: {kb} doesn't look like a twitter-wiki KB "
+            f"warning: {kb} doesn't look like an engram KB "
             f"(no CLAUDE.md). Continuing anyway.",
             file=sys.stderr,
         )
-    state_dir = kb / ".twitter-wiki"
+    state_dir = kb / ".engram"
     raw_dir = kb / "raw"
     state_dir.mkdir(parents=True, exist_ok=True)
     raw_dir.mkdir(parents=True, exist_ok=True)

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Scaffold a new twitter-wiki knowledge base.
+Scaffold a new engram knowledge base.
 
 Usage:
     python3 scripts/init.py <path> [--no-obsidian] [--no-git] [--force]
@@ -56,7 +56,7 @@ def init_kb(
         kb_path / "raw" / "bookmarks",
         kb_path / "wiki" / "queries",
         kb_path / "notes",
-        kb_path / ".twitter-wiki",
+        kb_path / ".engram",
     ]
     if obsidian:
         dirs.append(kb_path / ".obsidian")
@@ -132,7 +132,7 @@ updated: {today}
 
 This directory is **yours**. Personal notes, drafts, journals, anything.
 
-The twitter-wiki skill (and Claude in general) **never reads or writes** in
+The engram skill (and Claude in general) **never reads or writes** in
 here. It's safe space.
 
 If you want Claude to see something, put it in the conversation directly.
@@ -165,7 +165,7 @@ If you want Claude to see something, put it in the conversation directly.
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Scaffold a new twitter-wiki KB."
+        description="Scaffold a new engram KB."
     )
     parser.add_argument("path", type=Path, help="Where to create the KB")
     parser.add_argument(

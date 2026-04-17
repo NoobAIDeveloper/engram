@@ -1,8 +1,8 @@
-# twitter-wiki
+# engram
 
 Turn your Twitter/X bookmarks, ChatGPT and Claude.ai conversations, Claude Code
 sessions, browser bookmarks, GitHub stars, and Kindle highlights into a living,
-interlinked knowledge base that you can actually read. A Claude Code skill
+interlinked knowledge base that you can actually read. A Claude Code plugin
 plus a small set of Python scripts.
 
 You bookmark things, chat with AI assistants, and star repos intending to come
@@ -26,7 +26,7 @@ sources       →  sync.py         →  raw/items.jsonl
  Claude Code, bookmarks,            APIs, local logs, zip imports)
  GitHub stars, Kindle)
 
-items         →  Claude          →  .twitter-wiki/cluster-map.json
+items         →  Claude          →  .engram/cluster-map.json
                  (samples your content, derives 8–20 topics)
 
 cluster map   →  preprocess.py   →  raw/bookmarks/<topic>.md
@@ -57,13 +57,24 @@ Claude's. The `notes/` directory is yours — the skill never reads it.
 
 ## Install
 
+### Option A: Plugin marketplace (recommended)
+
 ```bash
-git clone https://github.com/NoobAIDeveloper/twitter-wiki ~/src/twitter-wiki
-cd ~/src/twitter-wiki
+claude plugin marketplace add NoobAIDeveloper/engram
+claude plugin install engram
+```
+
+That's it. The Python venv and dependencies are set up automatically on first use.
+
+### Option B: Manual install
+
+```bash
+git clone https://github.com/NoobAIDeveloper/engram ~/src/engram
+cd ~/src/engram
 ./install.sh
 ```
 
-This symlinks the skill into `~/.claude/skills/twitter-wiki` and the slash
+This symlinks the skill into `~/.claude/skills/engram` and the slash
 commands into `~/.claude/commands/`. Edits to the repo are live — no rebuild.
 
 Uninstall: `./install.sh --uninstall`.
@@ -175,7 +186,7 @@ Obsidian vault config. Run once per KB, from anywhere.
 **`/kb-add-source <source-name>`**
 Walks you through per-source config. Most sources need nothing (cookies
 handle auth); `github-stars` needs your handle, `kindle` needs a clippings
-path. Writes to `.twitter-wiki/sources.json`.
+path. Writes to `.engram/sources.json`.
 ```
 > /kb-add-source github-stars
 > /kb-add-source kindle --clippings "/Volumes/Kindle/documents/My Clippings.txt"
@@ -279,7 +290,7 @@ Cancels the scheduled auto-sync for the current KB.
 ```
 my-kb/
 ├── CLAUDE.md                          # KB-level rules (generated)
-├── .twitter-wiki/
+├── .engram/
 │   ├── cluster-map.json               # Claude-generated topic → match rules
 │   ├── sync-meta.json                 # Owned by sync.py
 │   └── ingest-state.json              # Tracks what's been synthesized
@@ -330,7 +341,7 @@ There is **no built-in topic list**. On first `/kb-ingest`:
 2. Claude derives 8–20 kebab-case topics from what it sees. If your bookmarks
    are mostly recipes, you get cooking topics. If they're mostly trades,
    finance topics. The skill is domain-agnostic.
-3. Claude writes `.twitter-wiki/cluster-map.json` — topic name, description,
+3. Claude writes `.engram/cluster-map.json` — topic name, description,
    and match rules (keywords / hashtags / authors / regex). It's plain JSON
    so you can hand-edit it in any text editor.
 4. You review. One round of edits, then proceed.
@@ -418,9 +429,13 @@ File an issue.
 ## Layout of this repo
 
 ```
-twitter-wiki/
-├── SKILL.md                       # The skill manifest — loaded into Claude's context
-├── install.sh                     # Installer (symlinks into ~/.claude/)
+engram/
+├── .claude-plugin/                # Plugin manifest + marketplace listing
+│   ├── plugin.json
+│   └── marketplace.json
+├── skills/engram/SKILL.md         # The skill manifest — loaded into Claude's context
+├── install.sh                     # Manual installer (symlinks into ~/.claude/)
+├── bin/engram-py                  # Self-bootstrapping Python runner
 ├── commands/                      # Slash command definitions
 │   └── kb-*.md
 ├── scripts/                       # Python scripts, invoked via the bundled .venv

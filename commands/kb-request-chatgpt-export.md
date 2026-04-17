@@ -11,7 +11,7 @@ This command doesn't require a KB — it just triggers the email. Don't `cd` che
 Run:
 
 ```bash
-~/.claude/skills/twitter-wiki/.venv/bin/python ~/.claude/skills/twitter-wiki/scripts/sources/chatgpt.py \
+~/.claude/skills/engram/.venv/bin/python ~/.claude/skills/engram/scripts/sources/chatgpt.py \
   --request-export
 ```
 

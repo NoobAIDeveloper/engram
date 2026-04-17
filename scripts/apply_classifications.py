@@ -3,7 +3,7 @@
 Apply a Haiku-produced classification overlay to the rule-based routing.
 
 The Haiku subagent spawned by /kb-ingest reads `raw/bookmarks/_unsorted.jsonl`
-and `.twitter-wiki/cluster-map.json`, then writes a classification mapping:
+and `.engram/cluster-map.json`, then writes a classification mapping:
 
     {"classifications": {"item_id_1": ["topic-a"], "item_id_2": ["topic-a", "topic-b"], ...}}
 
@@ -65,7 +65,7 @@ def main() -> int:
     args = ap.parse_args()
 
     kb: Path = args.kb.resolve()
-    map_path = kb / ".twitter-wiki" / "cluster-map.json"
+    map_path = kb / ".engram" / "cluster-map.json"
     batch_dir = kb / "raw" / "bookmarks"
 
     topics = load_cluster_map(map_path)

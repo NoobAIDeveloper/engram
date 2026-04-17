@@ -2,7 +2,7 @@
 
 A personal knowledge base built from Twitter/X bookmarks. Bookmarks are synced from a logged-in browser session, clustered into topic batches by a deterministic script using a Claude-derived map, and synthesized into wiki pages. This file is the operational contract between the user and Claude.
 
-> This KB is managed by the **twitter-wiki** Claude Code skill. The skill provides slash commands (`/kb-sync`, `/kb-ingest`, `/kb-recluster`, `/kb-query`, `/kb-lint`, `/kb-status`) and the synthesis logic. See `~/.claude/skills/twitter-wiki/SKILL.md` for the full operational spec.
+> This KB is managed by the **engram** Claude Code skill. The skill provides slash commands (`/kb-sync`, `/kb-ingest`, `/kb-recluster`, `/kb-query`, `/kb-lint`, `/kb-status`) and the synthesis logic. See `~/.claude/skills/engram/SKILL.md` for the full operational spec.
 
 Created: {{created_date}}
 
@@ -24,7 +24,7 @@ Created: {{created_date}}
 │   ├── queries/                 # Saved query-result pages
 │   └── <topic-pages>.md
 ├── notes/                       # User-only personal notes — Claude never reads or writes here
-├── .twitter-wiki/
+├── .engram/
 │   ├── sync-meta.json           # Sync state (cursor, last sync time, count)
 │   ├── cluster-map.json         # Topic → match rules (Claude generates)
 │   └── ingest-state.json        # Which batches were synthesized at which sizes
@@ -157,7 +157,7 @@ If a future version adds articles or longer-form sources, extraction depth will 
 
 ## Core operations
 
-These are run by the user via slash commands and orchestrated by the **twitter-wiki** skill. See the skill's SKILL.md for the full workflows.
+These are run by the user via slash commands and orchestrated by the **engram** skill. See the skill's SKILL.md for the full workflows.
 
 | Command | Effect |
 |---|---|
@@ -177,7 +177,7 @@ When Claude opens a session in this KB:
 1. Read this `CLAUDE.md`.
 2. Read `wiki/index.md` to see what topics exist (skip if it doesn't exist yet — KB hasn't been ingested).
 3. Skim the last ~10 entries of `wiki/log.md` to understand recent operations.
-4. Check `.twitter-wiki/sync-meta.json` to see when the last sync ran. If it's been >7 days, suggest `/kb-sync`.
+4. Check `.engram/sync-meta.json` to see when the last sync ran. If it's been >7 days, suggest `/kb-sync`.
 5. Ask the user what they want to do, or wait for a slash command.
 
 Never assume — always check state before acting.

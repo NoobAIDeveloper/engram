@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Install the twitter-wiki Claude Code skill.
+# Install the engram Claude Code skill.
 #
 # Creates:
-#   ~/.claude/skills/twitter-wiki     symlink to this repo
+#   ~/.claude/skills/engram           symlink to this repo
 #   ~/.claude/commands/kb-*.md        symlinks to commands/kb-*.md
 #   <repo>/.venv/                     Python venv with cryptography installed
 #
@@ -15,11 +15,11 @@ set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="$REPO_DIR/.venv"
-SKILL_LINK="$HOME/.claude/skills/twitter-wiki"
+SKILL_LINK="$HOME/.claude/skills/engram"
 COMMANDS_DIR="$HOME/.claude/commands"
 
 uninstall() {
-  echo "Removing twitter-wiki skill..."
+  echo "Removing engram skill..."
   [ -L "$SKILL_LINK" ] && rm "$SKILL_LINK" && echo "  removed $SKILL_LINK"
   for cmd in "$REPO_DIR"/commands/kb-*.md; do
     name="$(basename "$cmd")"
@@ -102,7 +102,7 @@ done
 cat <<EOF
 
 ---------------------------------------------------------------
-twitter-wiki installed.
+engram installed.
 
 Next steps:
 

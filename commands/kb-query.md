@@ -3,7 +3,7 @@ description: Answer a question grounded in the current wiki
 argument-hint: <question>
 ---
 
-The user wants an answer from their wiki. The current working directory should be a twitter-wiki KB (it should contain a `CLAUDE.md` and a `.twitter-wiki/` subdirectory). If it doesn't, tell the user to `cd` into their KB first or run `/kb-init` to scaffold one.
+The user wants an answer from their wiki. The current working directory should be a engram KB (it should contain a `CLAUDE.md` and a `.engram/` subdirectory). If it doesn't, tell the user to `cd` into their KB first or run `/kb-init` to scaffold one.
 
 `$ARGUMENTS` is the question. If it's empty, ask the user what they want to know — don't guess.
 

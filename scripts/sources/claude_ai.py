@@ -271,7 +271,7 @@ def sync(
     browser: str = "auto",
     full: bool = False,
 ) -> list[dict[str, Any]]:
-    state_dir = kb_dir / ".twitter-wiki"
+    state_dir = kb_dir / ".engram"
     state_dir.mkdir(parents=True, exist_ok=True)
     meta_path = state_dir / "claude-ai-sync-meta.json"
 

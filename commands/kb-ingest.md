@@ -3,14 +3,14 @@ description: Cluster bookmarks and synthesize wiki pages from the current KB
 argument-hint: [topic-name]
 ---
 
-The user wants to ingest items into the wiki. The current working directory should be a twitter-wiki KB (it should contain a `CLAUDE.md` and a `.twitter-wiki/` subdirectory). If it doesn't, tell the user to `cd` into their KB first or run `/kb-init` to scaffold one.
+The user wants to ingest items into the wiki. The current working directory should be a engram KB (it should contain a `CLAUDE.md` and a `.engram/` subdirectory). If it doesn't, tell the user to `cd` into their KB first or run `/kb-init` to scaffold one.
 
 Also confirm `raw/items.jsonl` (or legacy `raw/bookmarks.jsonl`) exists and is non-empty. If it's missing or empty, tell the user to run `/kb-sync` first and stop.
 
 Then follow the **Ingest workflow** in SKILL.md end to end. In particular:
 
-- If `.twitter-wiki/cluster-map.json` does not exist, do the bootstrap step (sample items with the per-source 15% / [10, 200] rule described in SKILL.md, derive topics, write the map, confirm with the user) before running preprocess.
-- Run `~/.claude/skills/twitter-wiki/.venv/bin/python ~/.claude/skills/twitter-wiki/scripts/preprocess.py --kb $(pwd)` once the map is in place.
+- If `.engram/cluster-map.json` does not exist, do the bootstrap step (sample items with the per-source 15% / [10, 200] rule described in SKILL.md, derive topics, write the map, confirm with the user) before running preprocess.
+- Run `~/.claude/skills/engram/.venv/bin/python ~/.claude/skills/engram/scripts/preprocess.py --kb $(pwd)` once the map is in place.
 - Synthesize or update wiki pages per the workflow, consulting `ingest-state.json` to skip batches that haven't grown.
 
 ## Optional: LLM-classify the _unsorted bucket
@@ -23,13 +23,13 @@ Only proceed if the user agrees. Then:
 
 1. Spawn the classification subagent with the Agent tool, **pinning `model: "haiku"`**. Example prompt (adapt counts/paths):
 
-   > *Classify the items in `<kb>/raw/bookmarks/_unsorted.jsonl` against the topics defined in `<kb>/.twitter-wiki/cluster-map.json`. For each item, pick zero or more topic names from the existing `topics[].name` list. Multi-assign is allowed (an item can legitimately land in more than one topic). Do NOT invent new topic names. Write the result to `<kb>/raw/bookmarks/_classifications.json` with this exact shape: `{"classifications": {"<item_id>": ["topic-name", ...], ...}}`. Omit items you cannot confidently place or give them an empty list — they'll stay unsorted. Return a one-line summary of how many you matched.*
+   > *Classify the items in `<kb>/raw/bookmarks/_unsorted.jsonl` against the topics defined in `<kb>/.engram/cluster-map.json`. For each item, pick zero or more topic names from the existing `topics[].name` list. Multi-assign is allowed (an item can legitimately land in more than one topic). Do NOT invent new topic names. Write the result to `<kb>/raw/bookmarks/_classifications.json` with this exact shape: `{"classifications": {"<item_id>": ["topic-name", ...], ...}}`. Omit items you cannot confidently place or give them an empty list — they'll stay unsorted. Return a one-line summary of how many you matched.*
 
 2. After the subagent finishes, apply its output:
 
    ```bash
-   ~/.claude/skills/twitter-wiki/.venv/bin/python \
-     ~/.claude/skills/twitter-wiki/scripts/apply_classifications.py \
+   ~/.claude/skills/engram/.venv/bin/python \
+     ~/.claude/skills/engram/scripts/apply_classifications.py \
      --kb $(pwd) \
      --classifications raw/bookmarks/_classifications.json
    ```
