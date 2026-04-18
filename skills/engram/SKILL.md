@@ -16,8 +16,19 @@ This skill ships as a Claude Code plugin. On first use, ensure the plugin is lin
 ```bash
 # Link the plugin (one-time — skip if ~/.claude/skills/engram already exists)
 if [ ! -e "$HOME/.claude/skills/engram" ]; then
-  INSTALL_PATH=$(python3 -c "import json,pathlib;print(next(p['installPath'] for p in json.loads(pathlib.Path('~/.claude/plugins/installed_plugins.json').expanduser().read_text()) if 'engram' in p['id']))" 2>/dev/null)
-  if [ -n "$INSTALL_PATH" ]; then
+  # Prefer CLAUDE_PLUGIN_ROOT (set by Claude Code when a plugin skill runs).
+  INSTALL_PATH="${CLAUDE_PLUGIN_ROOT:-}"
+  if [ -z "$INSTALL_PATH" ]; then
+    INSTALL_PATH=$(python3 - <<'PY' 2>/dev/null
+import json, pathlib
+data = json.loads(pathlib.Path('~/.claude/plugins/installed_plugins.json').expanduser().read_text())
+for pid, recs in data.get('plugins', {}).items():
+    if 'engram' in pid and recs:
+        print(recs[0]['installPath']); break
+PY
+)
+  fi
+  if [ -n "$INSTALL_PATH" ] && [ -d "$INSTALL_PATH" ]; then
     mkdir -p ~/.claude/skills
     ln -sf "$INSTALL_PATH" ~/.claude/skills/engram
   fi
