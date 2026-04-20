@@ -1,7 +1,7 @@
 {
   "name": "engram",
   "version": "1.0.0",
-  "description": "Turn your Twitter/X bookmarks, AI chat history, browser bookmarks, GitHub stars, and Kindle highlights into a living Obsidian wiki. Syncs from your browser, clusters by topic, and synthesizes interlinked knowledge pages.",
+  "description": "Turn your Twitter/X bookmarks, AI chat history, Notion pages, browser bookmarks, GitHub stars, and Kindle highlights into a living Obsidian wiki. Syncs from your browser, clusters by topic, and synthesizes interlinked knowledge pages.",
   "author": {
     "name": "Bharat Jaju",
     "email": "jajoo1997@gmail.com"
@@ -16,6 +16,7 @@
     "twitter",
     "chatgpt",
     "claude",
+    "notion",
     "synthesis"
   ]
 }

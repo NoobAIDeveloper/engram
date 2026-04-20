@@ -446,6 +446,49 @@ def _sync_claude_ai(kb: Path, *, browser: str = "auto", full: bool = False) -> i
     return 0
 
 
+def _sync_notion(kb: Path, *, full: bool = False) -> int:
+    from sources import notion
+    from sources.base import replace_source_items
+
+    token = notion._load_token(kb)
+    if not token:
+        print(
+            "[sync] source=notion · no token configured; skipping. "
+            "Add to sources.json: {\"notion\": {\"token\": \"secret_...\"}}",
+            file=sys.stderr,
+        )
+        return 0
+
+    print("[sync] source=notion · fetching pages via v1 REST API", file=sys.stderr)
+    try:
+        items = notion.sync(kb, full=full)
+    except notion.NotionAuthError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        print("sync failed: notion → auth error")
+        return 4
+    except notion.NotionRateLimitError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        print("sync failed: notion → rate limited")
+        return 5
+
+    # Incremental: notion.sync only emits items for changed pages, and has
+    # already dropped their old chunks from items.jsonl. Merge the fresh
+    # chunks with everything else previously known for this source.
+    from sources.base import load_items, merge_items
+    existing = [
+        it for it in load_items(kb / "raw" / "items.jsonl")
+        if it.get("source") == notion.SOURCE_ID
+    ]
+    merged, _ = merge_items(existing, items)
+    total, this_source = replace_source_items(kb, notion.SOURCE_ID, merged)
+    print(
+        f"[sync] notion: {this_source} chunk(s) · items.jsonl now has {total} total",
+        file=sys.stderr,
+    )
+    print(f"sync complete: notion → {this_source} items")
+    return 0
+
+
 def _sync_claude_code(kb: Path, *, include_self: bool = False) -> int:
     from sources import claude_code
     from sources.base import replace_source_items
@@ -475,7 +518,7 @@ def main() -> None:
     parser.add_argument(
         "--source",
         default="x",
-        help="Source to sync: x (default), claude-code, chatgpt, claude-ai, browser-bookmarks, github-stars, kindle, all",
+        help="Source to sync: x (default), claude-code, chatgpt, claude-ai, notion, browser-bookmarks, github-stars, kindle, all",
     )
     parser.add_argument(
         "--browser",
@@ -503,7 +546,7 @@ def main() -> None:
     args = parser.parse_args()
 
     sources_to_run = (
-        ["x", "claude-code", "chatgpt", "claude-ai", "browser-bookmarks", "github-stars"]
+        ["x", "claude-code", "chatgpt", "claude-ai", "notion", "browser-bookmarks", "github-stars"]
         if args.source == "all"
         else [args.source]
     )
@@ -525,6 +568,8 @@ def main() -> None:
                 rc = _sync_chatgpt(args.kb, browser=args.browser, full=args.full)
             elif src == "claude-ai":
                 rc = _sync_claude_ai(args.kb, browser=args.browser, full=args.full)
+            elif src == "notion":
+                rc = _sync_notion(args.kb, full=args.full)
             elif src == "browser-bookmarks":
                 rc = _sync_browser_bookmarks(args.kb)
             elif src == "github-stars":
