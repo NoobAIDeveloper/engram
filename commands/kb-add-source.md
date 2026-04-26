@@ -67,17 +67,36 @@ Privacy note: during `/kb-ingest`, page content is sent to Anthropic's API (same
 After updating `sources.json`, tell them to run `/kb-sync --source notion`.
 
 ### `granola`
-macOS-only. Granola stores every meeting in a local JSON cache at `~/Library/Application Support/Granola/cache-v3.json` — no API, no token, no browser cookies. If the cache is in the default location, no config is needed. Tell them to run `/kb-sync --source granola`.
+macOS-only. Granola stores every meeting in a local JSON cache at `~/Library/Application Support/Granola/cache-v6.json` (older builds used v3/v5; the adapter resolves whichever is newest). No API, no token, no browser cookies — if the cache is in the default location, no path config is needed.
 
-If they moved the cache or want to point at a backup, add an override to `sources.json`:
+Walk the user through ONE question. Present the options as a numbered list and let them reply with a letter, a number, or the mode name. If their reply is ambiguous or empty, default to `both` and tell them you've done so.
+
+> What do you want ingested per meeting?
+>
+> [a] **Notes only** — just what you typed in the Granola editor.
+> [b] **Transcript only** — raw dialogue captured from mic + system audio.
+> [c] **Both** — notes first, then transcript appended. *(recommended)*
+> [d] **Auto** — notes if you typed anything substantive (>200 chars), otherwise transcript.
+
+Map their answer to a mode string: `notes` | `transcript` | `both` | `auto`. Then merge into `.engram/sources.json`:
 
 ```json
-{"granola": {"cache_path": "/path/to/cache-v3.json"}}
+{"granola": {"content_mode": "<chosen-mode>"}}
 ```
 
-Chunking picks the highest-signal available content per meeting: AI summary (split along its H1/H2 headings) → user/AI notes (ProseMirror headings) → raw transcript (size-based windowing as a last resort). Meetings with no usable content anywhere are skipped.
+If the user volunteers that their cache lives somewhere unusual (moved drive, backup, multiple Granola installs), also set `cache_path` in the same `granola` block:
 
-Privacy note: meeting content is sent to Anthropic's API during `/kb-ingest` for synthesis, same as every other source.
+```json
+{"granola": {"content_mode": "both", "cache_path": "/path/to/cache-v6.json"}}
+```
+
+Don't volunteer `cache_path` unprompted — most users don't need it.
+
+Chunking behavior given the chosen mode: `notes` and `transcript` produce a single stream of chunks. `both` emits notes chunks first (heading-split) followed by transcript chunks (size-windowed) under a single `granola:<doc_id>:<chunk_index>` id family. `auto` picks notes if it's substantive, else transcript, else both as a last resort. Meetings with no usable content in the chosen stream(s) are skipped.
+
+Privacy note: meeting content is sent to Anthropic's API during `/kb-ingest` for synthesis, same as every other source. If the user is squeamish about transcript text leaving their machine, steer them to `notes` mode.
+
+After updating `sources.json`, tell them to run `/kb-sync --source granola`.
 
 ## After configuring
 

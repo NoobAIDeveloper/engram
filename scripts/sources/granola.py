@@ -4,7 +4,8 @@ Granola source adapter.
 
 Granola is a macOS-only meeting notetaker. Its desktop app stores every
 meeting in a single local JSON cache at
-`~/Library/Application Support/Granola/cache-v3.json`. No cloud API
+`~/Library/Application Support/Granola/cache-v6.json` (older builds used
+v3/v5 — `_default_cache_path` resolves whatever's newest). No cloud API
 involved — this adapter reads the file directly, same pattern as the
 browser-bookmarks and claude-code adapters.
 
@@ -16,16 +17,37 @@ inner object has a `state` key with:
 - `meetingsMetadata`: map of doc_id → extra metadata (attendees, calendar)
 - `transcripts`: map of doc_id → list of transcript segments
 - `documentPanels`: map of doc_id → { panel_id → { original_content: html,
-   content: prosemirror } } — contains the AI-generated summary
+   content: prosemirror } } — historically held the AI-generated summary,
+   but Granola no longer persists enhanced summaries to the local cache
+   (they're server-side now); this is parsed for forward-compat but is
+   effectively always empty in practice.
 - `documentLists` / `documentListsMetadata`: folder structure
 
-One meeting becomes N Items (one per AI-summary H1/H2 section, or one
-per notes heading if no summary, or size-chunked transcript if neither).
-Item id: `granola:<meeting_id>:<chunk_index>`.
+Chunking strategy — driven by `granola.content_mode` in
+`.engram/sources.json`. Four modes:
 
-Config (optional) — override the cache path in `.engram/sources.json`:
+- `notes`       — only the user-typed notes (ProseMirror headings).
+- `transcript`  — only the raw transcript (size-chunked at 4000 chars).
+- `both`        — notes first (heading-chunked), transcript appended as
+                  additional chunks (size-chunked). DEFAULT when the
+                  config field is missing or unrecognized.
+- `auto`        — notes if its rendered body is substantive (>200 chars
+                  excluding heading-only blocks), else transcript, else
+                  both as a last resort.
 
-    {"granola": {"cache_path": "/custom/path/cache-v3.json"}}
+A surviving AI-summary panel (rare) takes priority over notes in the
+`notes`, `both`, and `auto` modes; in `transcript` mode it's ignored.
+Meetings with no usable content in any selected stream are skipped.
+
+Item id: `granola:<meeting_id>:<chunk_index>` — single id family
+regardless of mode. In `both` mode notes chunks come first (indices
+0..K), transcript chunks follow (indices K+1..N).
+
+Config (optional) — both keys live under `granola` in
+`.engram/sources.json`:
+
+    {"granola": {"cache_path": "/custom/path/cache-v6.json",
+                 "content_mode": "both"}}
 """
 
 from __future__ import annotations
@@ -44,28 +66,81 @@ from .base import (
     chunk_by_size,
     drop_items_by_id_prefix,
     load_items,
-    make_chunk_items,
 )
 
 
 SOURCE_ID = "granola"
-DEFAULT_CACHE_PATH = Path.home() / "Library" / "Application Support" / "Granola" / "cache-v3.json"
+GRANOLA_DIR = Path.home() / "Library" / "Application Support" / "Granola"
+# Granola has shipped multiple cache versions (v3 pre-2025, v5, v6+). Prefer
+# the newest cache-v*.json present so we don't break when they bump again.
+_CACHE_GLOB = "cache-v*.json"
+
+
+def _default_cache_path() -> Path:
+    candidates = sorted(
+        GRANOLA_DIR.glob(_CACHE_GLOB),
+        key=lambda p: int(re.search(r"cache-v(\d+)\.json$", p.name).group(1))
+        if re.search(r"cache-v(\d+)\.json$", p.name) else 0,
+        reverse=True,
+    )
+    return candidates[0] if candidates else GRANOLA_DIR / "cache-v6.json"
+
+
+# Back-compat: kept as an attribute many callers may reference.
+DEFAULT_CACHE_PATH = _default_cache_path()
 
 
 # ---- config / state --------------------------------------------------------
 
-def _load_cache_path(kb_dir: Path) -> Path:
+VALID_CONTENT_MODES = ("notes", "transcript", "both", "auto")
+DEFAULT_CONTENT_MODE = "both"
+# Auto heuristic: "notes is substantive" if its non-heading body chars
+# across all heading-chunks exceeds this threshold.
+AUTO_NOTES_BODY_THRESHOLD = 200
+
+
+def _read_granola_config(kb_dir: Path) -> dict[str, Any]:
     cfg = kb_dir / ".engram" / "sources.json"
-    if cfg.exists():
-        try:
-            data = json.loads(cfg.read_text())
-        except json.JSONDecodeError:
-            data = {}
-        g = (data.get("granola") or {}) if isinstance(data, dict) else {}
-        cp = g.get("cache_path")
-        if isinstance(cp, str) and cp.strip():
-            return Path(cp).expanduser()
-    return DEFAULT_CACHE_PATH
+    if not cfg.exists():
+        return {}
+    try:
+        data = json.loads(cfg.read_text())
+    except json.JSONDecodeError:
+        return {}
+    g = (data.get("granola") or {}) if isinstance(data, dict) else {}
+    return g if isinstance(g, dict) else {}
+
+
+def _load_cache_path(kb_dir: Path) -> Path:
+    g = _read_granola_config(kb_dir)
+    cp = g.get("cache_path")
+    if isinstance(cp, str) and cp.strip():
+        return Path(cp).expanduser()
+    # Resolve fresh each call so a Granola version bump (cache-v6 → v7) is
+    # picked up without the user editing config.
+    return _default_cache_path()
+
+
+def _load_content_mode(kb_dir: Path) -> str:
+    """Return the configured content_mode, defaulting to `both`.
+
+    Unknown values warn and fall back to the default rather than crashing
+    the whole sync — Granola is the user's most-personal source and a
+    typo shouldn't kill it.
+    """
+    g = _read_granola_config(kb_dir)
+    raw = g.get("content_mode")
+    if raw is None:
+        return DEFAULT_CONTENT_MODE
+    if isinstance(raw, str) and raw.strip().lower() in VALID_CONTENT_MODES:
+        return raw.strip().lower()
+    print(
+        f"[granola] unknown content_mode {raw!r}; "
+        f"valid: {', '.join(VALID_CONTENT_MODES)}. Defaulting to "
+        f"{DEFAULT_CONTENT_MODE!r}.",
+        file=sys.stderr,
+    )
+    return DEFAULT_CONTENT_MODE
 
 
 def _meta_path(kb_dir: Path) -> Path:
@@ -476,13 +551,44 @@ def sync(
         return []
 
     cache_path = cache_path or _load_cache_path(kb_dir)
+
+    content_mode = _load_content_mode(kb_dir)
+    print(f"[granola] content_mode={content_mode!r}", file=sys.stderr)
+
+    meta = _load_meta(kb_dir)
+    prior_mode = meta.get("content_mode")
+    # If the configured mode changed since the last successful sync, the
+    # incremental cursor is no longer trustworthy: items.jsonl may hold
+    # chunks from streams the user just disabled (e.g. transcript content
+    # lingering after switching to `notes`-only). Force a full re-sync and
+    # purge ALL granola items so meetings now skipped under the new mode
+    # don't leave stale chunks behind. A missing prior_mode means this is
+    # the first sync since the field was introduced — treat as a match.
+    # Done before cache load so a tightening config change still purges
+    # stale items even if the cache is temporarily unavailable.
+    mode_changed = prior_mode is not None and prior_mode != content_mode
+    if mode_changed:
+        print(
+            f"[granola] content_mode changed ({prior_mode!r} → "
+            f"{content_mode!r}); forcing full re-sync and clearing stale "
+            f"granola items.",
+            file=sys.stderr,
+        )
+        drop_items_by_id_prefix(kb_dir, f"{SOURCE_ID}:")
+        full = True
+
     try:
         state = load_cache(cache_path)
     except GranolaCacheError as exc:
         print(f"[granola] {exc}", file=sys.stderr)
+        # Even on cache miss, persist the active mode so the next sync
+        # doesn't see a stale prior_mode and re-trigger the purge.
+        if mode_changed:
+            existing = dict(meta)
+            existing["content_mode"] = content_mode
+            _write_meta(kb_dir, existing)
         return []
 
-    meta = _load_meta(kb_dir)
     last_synced_at = None if full else meta.get("last_synced_at")
 
     known_ids: set[str] = set()
@@ -514,7 +620,7 @@ def sync(
             if not updated or str(updated) <= last_synced_at:
                 continue
 
-        items = _build_items_for_meeting(meeting)
+        items = _build_items_for_meeting(meeting, content_mode=content_mode)
         if not items:
             continue
 
@@ -525,6 +631,7 @@ def sync(
     now = datetime.now(timezone.utc).isoformat()
     _write_meta(kb_dir, {
         "last_synced_at": now,
+        "content_mode": content_mode,
         "last_run_meetings_seen": seen,
         "last_run_meetings_changed": changed,
         "cache_path": str(cache_path),
@@ -537,31 +644,75 @@ def sync(
     return [it.to_json() for it in all_items]
 
 
-def _build_items_for_meeting(meeting: dict[str, Any]) -> list[Item]:
-    """Pick content source (summary > notes > transcript), chunk, emit Items."""
+def _build_notes_chunks(meeting: dict[str, Any]) -> tuple[list, str]:
+    """Return (chunks, content_part_label) for the notes-side stream.
+
+    Labels: "ai_summary" if a (rare) panel HTML survives, else "notes".
+    Chunks may be empty if neither stream has parseable content; the
+    caller decides what to do about that.
+    """
+    summary_html = meeting.get("ai_summary_html") or ""
+    notes = meeting.get("notes") or meeting.get("panel_content")
+
+    blocks: list[dict[str, str]] = []
+    label = "notes"
+    if summary_html.strip():
+        blocks = _summary_html_to_blocks(summary_html)
+        label = "ai_summary"
+    elif isinstance(notes, dict) and notes:
+        blocks = _prosemirror_to_blocks(notes)
+        label = "notes"
+
+    if not blocks:
+        return [], label
+
+    chunks = chunk_by_headings(blocks, heading_levels=("heading_1", "heading_2"))
+    if len(chunks) == 1 and chunks[0].title is None and len(chunks[0].body) > 6000:
+        chunks = chunk_by_size(chunks[0].body, max_chars=4000)
+    if not any(c.body.strip() for c in chunks):
+        return [], label
+    return chunks, label
+
+
+def _notes_body_chars(chunks: list) -> int:
+    """Count rendered body chars across notes chunks, excluding chunks
+    that are pure heading (title-only, empty body). Used by `auto`."""
+    total = 0
+    for c in chunks:
+        body = (c.body or "").strip()
+        if body:
+            total += len(body)
+    return total
+
+
+def _build_transcript_chunks(meeting: dict[str, Any]) -> list:
+    transcript_text = _transcript_text(meeting.get("transcript_data"))
+    if not transcript_text.strip():
+        return []
+    return chunk_by_size(transcript_text, max_chars=4000)
+
+
+def _build_items_for_meeting(
+    meeting: dict[str, Any],
+    *,
+    content_mode: str = DEFAULT_CONTENT_MODE,
+) -> list[Item]:
+    """Build chunked Items for a meeting per the given content_mode.
+
+    Modes (see module docstring): notes | transcript | both | auto.
+    Falls back gracefully when the chosen stream is empty:
+      - notes mode with no notes → empty (meeting skipped).
+      - transcript mode with no transcript → empty.
+      - both with no notes → emit transcript-only (and vice versa).
+      - auto picks notes if substantive, else transcript, else
+        whatever single stream exists.
+    """
     meeting_id = str(meeting["_resolved_id"])
     title = _meeting_title(meeting)
     ts = _meeting_timestamp(meeting)
     participants = _meeting_participants(meeting)
     duration = _meeting_duration_minutes(meeting)
     folder = meeting.get("folder_name")
-
-    summary_html = meeting.get("ai_summary_html") or ""
-    notes = meeting.get("notes") or meeting.get("panel_content")
-    transcript_text = _transcript_text(meeting.get("transcript_data"))
-
-    # Build blocks from the highest-signal available source.
-    blocks: list[dict[str, str]] = []
-    content_source = ""
-    if summary_html.strip():
-        blocks = _summary_html_to_blocks(summary_html)
-        content_source = "ai_summary"
-    elif isinstance(notes, dict) and notes:
-        blocks = _prosemirror_to_blocks(notes)
-        content_source = "notes"
-    elif transcript_text.strip():
-        # No structure — fall through to size-based chunking below.
-        content_source = "transcript"
 
     preamble_parts: list[str] = []
     if participants:
@@ -573,48 +724,110 @@ def _build_items_for_meeting(meeting: dict[str, Any]) -> list[Item]:
         preamble_parts.append(f"Duration: {duration} min")
     if folder:
         preamble_parts.append(f"Folder: {folder}")
-    preamble = " · ".join(preamble_parts)
+    preamble = " · ".join(preamble_parts) or None
 
-    base_meta = {
+    base_meta_common: dict[str, Any] = {
         "meeting_id": meeting_id,
         "meeting_title": title,
         "meeting_date": ts,
         "participants": participants,
         "duration_minutes": duration,
         "folder_name": folder,
-        "content_source": content_source,
     }
+    timestamp = str(ts) if ts else ""
 
-    if blocks:
-        chunks = chunk_by_headings(blocks, heading_levels=("heading_1", "heading_2"))
-        # If the summary/notes produced a single giant unnamed chunk, window it.
-        if len(chunks) == 1 and chunks[0].title is None and len(chunks[0].body) > 6000:
-            chunks = chunk_by_size(chunks[0].body, max_chars=4000)
-        # Skip meetings with no real content anywhere.
-        if not any(c.body.strip() for c in chunks):
-            # If we also have a transcript, fall back to it rather than drop.
-            if not transcript_text.strip():
-                return []
-            blocks = []
+    # Resolve which streams to emit based on mode.
+    notes_chunks: list = []
+    notes_label = "notes"
+    transcript_chunks: list = []
 
-    if not blocks:
-        # Transcript-only fallback.
-        if not transcript_text.strip():
-            return []
-        chunks = chunk_by_size(transcript_text, max_chars=4000)
-        base_meta["content_source"] = "transcript"
+    if content_mode == "transcript":
+        transcript_chunks = _build_transcript_chunks(meeting)
+    elif content_mode == "notes":
+        notes_chunks, notes_label = _build_notes_chunks(meeting)
+    elif content_mode == "auto":
+        notes_chunks, notes_label = _build_notes_chunks(meeting)
+        body_chars = _notes_body_chars(notes_chunks)
+        if body_chars >= AUTO_NOTES_BODY_THRESHOLD:
+            # Notes is substantive — emit notes only, no transcript.
+            transcript_chunks = []
+        else:
+            # Sub-threshold notes (including the empty-H1-only case where
+            # notes_chunks is truthy but body_chars == 0): prefer transcript
+            # if present, otherwise fall back to whatever notes we have as
+            # a last resort rather than skipping the meeting entirely.
+            transcript_chunks = _build_transcript_chunks(meeting)
+            if transcript_chunks:
+                notes_chunks = []
+            # else: only thin notes survives — emit it as last resort.
+    else:  # "both" (and any unknown defensively defaulted upstream)
+        notes_chunks, notes_label = _build_notes_chunks(meeting)
+        transcript_chunks = _build_transcript_chunks(meeting)
 
-    return make_chunk_items(
-        source=SOURCE_ID,
-        parent_id=meeting_id,
-        parent_title=title,
-        chunks=chunks,
-        author=None,
-        url=None,
-        timestamp=str(ts) if ts else "",
-        base_metadata=base_meta,
-        preamble=preamble or None,
-    )
+    if not notes_chunks and not transcript_chunks:
+        return []
+
+    # Stitch notes chunks then transcript chunks into a single Item-id
+    # family. We can't reuse make_chunk_items twice (each call resets
+    # chunk_index from 0), so build Items directly.
+    notes_total = len(notes_chunks)
+    transcript_total = len(transcript_chunks)
+    total = notes_total + transcript_total
+
+    out: list[Item] = []
+    next_index = 0
+
+    def _emit(chunk, *, content_part: str) -> None:
+        nonlocal next_index
+        idx = next_index
+        next_index += 1
+
+        lines: list[str] = []
+        if title:
+            lines.append(f"# {title}")
+        if chunk.title:
+            lines.append(f"## {chunk.title}")
+        if lines:
+            lines.append("")
+        if idx == 0 and preamble:
+            lines.append(preamble.strip())
+            lines.append("")
+        if chunk.body:
+            lines.append(chunk.body)
+        text = "\n".join(lines).strip()
+
+        meta = dict(base_meta_common)
+        meta.update({
+            "parent_id": meeting_id,
+            "parent_title": title,
+            "chunk_index": idx,
+            "chunk_count": total,
+            "chunk_title": chunk.title,
+            "content_part": content_part,
+            # Back-compat: content_source used to identify which stream
+            # the meeting was rendered from. Keep it set to the same
+            # label for downstream code that still reads it.
+            "content_source": content_part,
+        })
+
+        out.append(
+            Item(
+                id=f"{SOURCE_ID}:{meeting_id}:{idx}",
+                source=SOURCE_ID,
+                text=text,
+                timestamp=timestamp,
+                author=None,
+                url=None,
+                metadata=meta,
+            )
+        )
+
+    for c in notes_chunks:
+        _emit(c, content_part=notes_label)
+    for c in transcript_chunks:
+        _emit(c, content_part="transcript")
+
+    return out
 
 
 if __name__ == "__main__":
