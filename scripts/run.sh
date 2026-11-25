@@ -3,8 +3,12 @@
 # Creates a venv and installs dependencies on first use — the user never
 # runs pip themselves.
 #
-# Usage: engram-py <script-path-relative-to-plugin-root> [args...]
-# Example: engram-py scripts/sync.py --kb /path/to/kb
+# Usage: bash scripts/run.sh <script-path-relative-to-plugin-root> [args...]
+# Example: bash scripts/run.sh scripts/sync.py --kb /path/to/kb
+#
+# Deliberately not in bin/ and not marked executable: it is only ever run
+# explicitly through bash by the plugin's own commands, never as a bare
+# command on PATH.
 #
 # The venv lives OUTSIDE the plugin directory. Claude Code installs each
 # plugin version into its own cache directory and deletes old ones, so a
@@ -16,7 +20,7 @@
 set -euo pipefail
 
 if [ $# -lt 1 ]; then
-  echo "usage: engram-py <script> [args...]" >&2
+  echo "usage: bash scripts/run.sh <script> [args...]" >&2
   exit 64
 fi
 

@@ -7,7 +7,7 @@ The user wants to lint the wiki. The current working directory should be a engra
 Run the lint script:
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/bin/engram-py" scripts/lint.py --kb "$(pwd)"
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/run.sh" scripts/lint.py --kb "$(pwd)"
 ```
 
 The script emits a structured report of issues (missing frontmatter, missing TLDR, missing counter-args on concept pages, broken wikilinks, orphan pages, stale pages). Follow the **Lint workflow** in SKILL.md: for each issue, fix it autonomously if you can, or surface it to the user if it needs content judgment beyond what's already on the page. Append a `lint` entry to `wiki/log.md` when done.

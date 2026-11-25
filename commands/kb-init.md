@@ -1,6 +1,6 @@
 ---
 description: Scaffold a new engram knowledge base at the given path
-argument-hint: <path> [--no-obsidian] [--no-git] [--force]
+argument-hint: "<path> [--no-obsidian] [--no-git] [--force]"
 ---
 
 The user wants to scaffold a new engram KB.
@@ -8,7 +8,7 @@ The user wants to scaffold a new engram KB.
 Run the init script:
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/bin/engram-py" scripts/init.py $ARGUMENTS
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/run.sh" scripts/init.py $ARGUMENTS
 ```
 
 If `$ARGUMENTS` is empty, ask the user where they want the KB to live (suggest `~/engram` as a default). Don't proceed without an explicit path.

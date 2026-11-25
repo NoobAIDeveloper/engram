@@ -1,6 +1,6 @@
 ---
 description: Re-derive the topic map and reconcile affected wiki pages
-argument-hint: [natural-language hint, e.g. "split finance from business"]
+argument-hint: "[natural-language hint, e.g. \"split finance from business\"]"
 ---
 
 The user wants to rework the cluster map. The current working directory should be a engram KB (it should contain a `CLAUDE.md` and a `.engram/` subdirectory). If it doesn't, tell the user to `cd` into their KB first or run `/engram:kb-init` to scaffold one.

@@ -178,7 +178,7 @@ preview). Plain markdown readers work too.
 | `claude-code` | none | Reads local Claude Code session logs under `~/.claude/projects/`. |
 | `notion` | integration token | Notion v1 REST API as an internal integration. Long pages split along H1/H2 into chunks. Access is scoped per-page in Notion's UI. |
 | `browser-bookmarks` | none | Reads Chrome/Brave/Edge bookmark JSON. |
-| `github-stars` | GitHub handle | Public API. `GITHUB_TOKEN` env var optional for higher rate limit. |
+| `github-stars` | GitHub handle | Public API, no token needed. |
 | `kindle` | `--clippings` path | One-shot import from `My Clippings.txt` on the Kindle drive. |
 
 Run `/engram:kb-sync --source <name>` or `/engram:kb-sync --source all`. For most sources, `/engram:kb-add-source <name>` walks you through the dialog interactively. The two sources below need a one-time external setup step before the wizard can finish.
@@ -482,10 +482,9 @@ engram/
 │   └── marketplace.json
 ├── skills/engram/SKILL.md         # The skill manifest — loaded into Claude's context
 ├── install.sh                     # Wrapper around `claude plugin install`
-├── bin/engram-py                  # Self-bootstrapping Python runner
 ├── commands/                      # Slash command definitions
 │   └── kb-*.md
-├── scripts/                       # Python scripts, run via bin/engram-py (self-bootstrapping venv)
+├── scripts/                       # Python scripts, run via scripts/run.sh (self-bootstrapping venv)
 │   ├── init.py                    # Scaffold a KB
 │   ├── sync.py                    # Pull bookmarks from X
 │   ├── cookies.py                 # Browser cookie extraction (internal)

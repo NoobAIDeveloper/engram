@@ -1,6 +1,6 @@
 ---
 description: Configure a new data source (GitHub, etc.) for this KB
-argument-hint: <source-name> [source-specific args]
+argument-hint: "<source-name> [source-specific args]"
 ---
 
 The user wants to enable a new data source for the current KB. Supported source names: `github-stars`, `claude-code`, `browser-bookmarks`, `kindle`, `chatgpt`, `claude-ai`, `notion`.
@@ -20,7 +20,6 @@ Ask the user for their GitHub handle if `$ARGUMENTS` didn't include one. Merge i
 {"github": {"handle": "their-handle"}}
 ```
 
-Optionally mention: setting `GITHUB_TOKEN` env var raises the rate limit from 60/hr to 5000/hr. They can do this in their shell profile — don't ask them to paste a token here.
 
 After updating `sources.json`, tell them to run `/engram:kb-sync --source github-stars`.
 

@@ -11,7 +11,7 @@ This command doesn't require a KB — it just triggers the email. Don't `cd` che
 Run:
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/bin/engram-py" scripts/sources/chatgpt.py \
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/run.sh" scripts/sources/chatgpt.py \
   --request-export
 ```
 

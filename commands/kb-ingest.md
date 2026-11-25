@@ -1,6 +1,6 @@
 ---
 description: Cluster bookmarks and synthesize wiki pages from the current KB
-argument-hint: [topic-name]
+argument-hint: "[topic-name]"
 ---
 
 The user wants to ingest items into the wiki. The current working directory should be a engram KB (it should contain a `CLAUDE.md` and a `.engram/` subdirectory). If it doesn't, tell the user to `cd` into their KB first or run `/engram:kb-init` to scaffold one.
@@ -10,7 +10,7 @@ Also confirm `raw/items.jsonl` (or legacy `raw/bookmarks.jsonl`) exists and is n
 Then follow the **Ingest workflow** in SKILL.md end to end. In particular:
 
 - If `.engram/cluster-map.json` does not exist, do the bootstrap step (sample items with the per-source 15% / [10, 200] rule described in SKILL.md, derive topics, write the map, confirm with the user) before running preprocess.
-- Run `"${CLAUDE_PLUGIN_ROOT}/bin/engram-py" scripts/preprocess.py --kb "$(pwd)"` once the map is in place.
+- Run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/run.sh" scripts/preprocess.py --kb "$(pwd)"` once the map is in place.
 - Synthesize or update wiki pages per the workflow, consulting `ingest-state.json` to skip batches that haven't grown.
 
 ## Optional: LLM-classify the _unsorted bucket
@@ -28,7 +28,7 @@ Only proceed if the user agrees. Then:
 2. After the subagent finishes, apply its output:
 
    ```bash
-   "${CLAUDE_PLUGIN_ROOT}/bin/engram-py" scripts/apply_classifications.py \
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/run.sh" scripts/apply_classifications.py \
      --kb "$(pwd)" \
      --classifications raw/bookmarks/_classifications.json
    ```

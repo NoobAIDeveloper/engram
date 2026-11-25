@@ -1,6 +1,6 @@
 ---
 description: Sync data from one or more configured sources into this KB
-argument-hint: [--source x|claude-code|chatgpt|claude-ai|notion|browser-bookmarks|github-stars|kindle|all] [source-specific flags]
+argument-hint: "[--source x|claude-code|chatgpt|claude-ai|notion|browser-bookmarks|github-stars|kindle|all] [source-specific flags]"
 ---
 
 The user wants to sync data into the current KB. The current working directory should be a KB (it should contain a `CLAUDE.md` and a `.engram/` subdirectory). If it doesn't, tell the user to `cd` into their KB first or run `/engram:kb-init` to scaffold one.
@@ -8,7 +8,7 @@ The user wants to sync data into the current KB. The current working directory s
 Run the sync dispatcher:
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/bin/engram-py" scripts/sync.py --kb "$(pwd)" $ARGUMENTS
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/run.sh" scripts/sync.py --kb "$(pwd)" $ARGUMENTS
 ```
 
 Supported sources:
@@ -19,7 +19,7 @@ Supported sources:
 - **claude-ai** — Claude.ai conversations via browser cookie (`sessionKey`). Flags: `--browser`, `--full`. Fragile — if it breaks, use `/engram:kb-import-claude` with an export zip.
 - **notion** — Pages shared with the Notion integration token in `.engram/sources.json` (set up with `/engram:kb-add-source`).
 - **browser-bookmarks** — Chrome/Brave/Edge saved bookmarks (local JSON files, all profiles).
-- **github-stars** — Public GitHub stars for the handle in `.engram/sources.json`. Set `GITHUB_TOKEN` env for higher rate limit.
+- **github-stars** — Public GitHub stars for the handle in `.engram/sources.json`.
 - **kindle** — One-shot import. Requires `--clippings <path-to-My Clippings.txt>`.
 - **all** — Run all configured sources in one go (kindle is skipped unless `--clippings` is given).
 

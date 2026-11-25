@@ -14,10 +14,10 @@ The scripts handle the mechanical work (auth, fetching, clustering, lint checks,
 Every script is run through the plugin's launcher, which creates its own Python environment on first use (about 10 seconds, once) — never ask the user to install Python packages:
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/bin/engram-py" scripts/<name>.py --kb "$(pwd)" [args]
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/run.sh" scripts/<name>.py --kb "$(pwd)" [args]
 ```
 
-`${CLAUDE_PLUGIN_ROOT}` is filled in by Claude Code when this skill loads. If you ever see it un-substituted, the launcher is also on `PATH` while the plugin is enabled — run `engram-py scripts/<name>.py …` instead. The only prerequisite is Python 3.10+; if the launcher says it is missing, relay its install hint to the user.
+`${CLAUDE_PLUGIN_ROOT}` is filled in by Claude Code when this skill loads. The only prerequisite is Python 3.10+; if the launcher says it is missing, relay its install hint to the user.
 
 ## Where things live
 
@@ -35,7 +35,7 @@ The user's KB directory:
 - `CLAUDE.md` — KB-level config & rules. Loaded automatically.
 - `.engram/cluster-map.json` — topic → match rules. **You generate this on first ingest.**
 - `.engram/classifications.json` — saved LLM placements for items the rules missed. Written by `apply_classifications.py`, re-applied by every preprocess run.
-- `.engram/sources.json` — per-source config. **May contain API tokens** (Notion, GitHub): never print its contents, never commit it.
+- `.engram/sources.json` — per-source config. **May contain API tokens** (Notion): never print its contents, never commit it.
 - `.engram/*sync-meta.json` — sync cursors. Owned by the scripts. Don't hand-edit.
 - `.engram/ingest-state.json` — tracks which clusters have been synthesized. Owned by you (you update it during ingest).
 
@@ -51,7 +51,7 @@ These slash commands ship with the plugin and each one delegates to a workflow b
 | Command | One-liner |
 |---|---|
 | `/engram:kb-init <path>` | Scaffold a new KB at `<path>` |
-| `/engram:kb-add-source` | Configure a source that needs setup (Notion, GitHub, …) |
+| `/engram:kb-add-source` | Configure a source that needs setup (Notion, GitHub stars, …) |
 | `/engram:kb-sync` | Pull new items from one or all sources |
 | `/engram:kb-import-chatgpt` / `/engram:kb-import-claude` | Import an official export zip (fallback when cookie sync is blocked) |
 | `/engram:kb-ingest` | Cluster + synthesize wiki pages from current items |
@@ -71,7 +71,7 @@ The most important workflow. Never deviate from this order.
    - Write `.engram/cluster-map.json`. Each topic entry: `name`, `description` (one line), `match` (keywords / hashtags / author handles / regex). See `${CLAUDE_PLUGIN_ROOT}/references/clustering-guide.md` for format.
    - Briefly tell the user what topics you derived and why. Offer them a chance to tweak before proceeding (one round of edits, then move on).
 
-2. **Run preprocess.** `"${CLAUDE_PLUGIN_ROOT}/bin/engram-py" scripts/preprocess.py --kb "$(pwd)"`. This writes `raw/bookmarks/<topic>.md` files and `_manifest.md`. Bookmarks matching nothing land in `_unsorted.md`.
+2. **Run preprocess.** `bash "${CLAUDE_PLUGIN_ROOT}/scripts/run.sh" scripts/preprocess.py --kb "$(pwd)"`. This writes `raw/bookmarks/<topic>.md` files and `_manifest.md`. Bookmarks matching nothing land in `_unsorted.md`.
 
 3. **Read existing state.**
    - Read `wiki/index.md` (or note it doesn't exist yet).
@@ -125,7 +125,7 @@ When the user asks a question via `/engram:kb-query` (or natural language):
 
 ## Lint workflow
 
-1. Run `"${CLAUDE_PLUGIN_ROOT}/bin/engram-py" scripts/lint.py --kb "$(pwd)"`. It returns a structured report of issues (missing frontmatter, missing TLDR, missing counter-args on concept pages, broken wikilinks, orphan pages, stale pages).
+1. Run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/run.sh" scripts/lint.py --kb "$(pwd)"`. It returns a structured report of issues (missing frontmatter, missing TLDR, missing counter-args on concept pages, broken wikilinks, orphan pages, stale pages).
 2. For each issue, decide: can you fix it autonomously? If yes, fix it. If no (e.g. requires content judgment beyond what's in the existing pages), report it to the user.
 3. Append to `wiki/log.md` under `lint`.
 
@@ -140,13 +140,13 @@ When the user asks a question via `/engram:kb-query` (or natural language):
 | `claude-ai` | none | Browser cookies from claude.ai. Q+A pairs. Fallback: manual export + `/engram:kb-import-claude <zip>`. |
 | `claude-code` | none | Walks `~/.claude/projects/` session logs. |
 | `browser-bookmarks` | none | Reads Chrome/Brave/Edge bookmark files, all profiles. |
-| `github-stars` | handle in `sources.json` | Public API; `GITHUB_TOKEN` env var optional for higher rate limit. |
+| `github-stars` | handle in `sources.json` | Public API, no token needed. |
 | `notion` | integration token in `sources.json` | Pages shared with the user's Notion integration. Set up via `/engram:kb-add-source`. |
 | `kindle` | `--clippings <path>` | One-shot import from `My Clippings.txt`. |
 
 ## Sync workflow
 
-1. Run `"${CLAUDE_PLUGIN_ROOT}/bin/engram-py" scripts/sync.py --kb "$(pwd)" [--source <name>]`. Default source is `x`. Source adapters handle their own cookie extraction, pagination, and dedupe; outputs land in `raw/items.jsonl` (or `raw/bookmarks.jsonl` for `x`) with `.engram/<source>-sync-meta.json` cursors.
+1. Run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/run.sh" scripts/sync.py --kb "$(pwd)" [--source <name>]`. Default source is `x`. Source adapters handle their own cookie extraction, pagination, and dedupe; outputs land in `raw/items.jsonl` (or `raw/bookmarks.jsonl` for `x`) with `.engram/<source>-sync-meta.json` cursors.
 2. Report new item count.
 3. If new items were added, suggest `/engram:kb-ingest`.
 4. If sync failed with an auth error, tell the user to re-login in the browser for that source.

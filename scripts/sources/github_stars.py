@@ -9,9 +9,8 @@ Configuration: the user's GitHub handle is read from
 `<kb>/.engram/sources.json` under the key `github.handle`. If that
 file doesn't exist or doesn't specify a handle, this adapter is a no-op.
 
-An optional personal access token raises the rate limit (60 → 5000
-requests/hour). It is taken from the `GITHUB_TOKEN` environment variable,
-else from `github.token` in sources.json.
+No token is used: the public endpoint allows 60 requests an hour without
+authentication, which covers 6,000 stars per sync.
 """
 
 from __future__ import annotations
@@ -46,17 +45,6 @@ def _read_github_config(kb_dir: Path) -> dict[str, Any]:
     return gh if isinstance(gh, dict) else {}
 
 
-def _load_token(kb_dir: Path | None) -> str | None:
-    """GITHUB_TOKEN env var wins; else `github.token` in sources.json."""
-    env = (os.environ.get("GITHUB_TOKEN") or "").strip()
-    if env:
-        return env
-    if kb_dir is None:
-        return None
-    tok = _read_github_config(kb_dir).get("token")
-    return tok.strip() if isinstance(tok, str) and tok.strip() else None
-
-
 def _rate_limit_reset(headers: Any) -> str:
     """Human-readable "resets at ..." suffix from rate-limit headers."""
     try:
@@ -78,44 +66,35 @@ def _load_handle(kb_dir: Path) -> str | None:
     return handle.strip().lstrip("@") if isinstance(handle, str) and handle.strip() else None
 
 
-def _fetch_page(handle: str, page: int, token: str | None) -> list[dict[str, Any]]:
+def _fetch_page(handle: str, page: int) -> list[dict[str, Any]]:
     url = f"{API}/users/{handle}/starred?per_page={PAGE_SIZE}&page={page}"
     req = urllib.request.Request(
         url,
         headers={
             "Accept": "application/vnd.github.v3.star+json",
-            "User-Agent": "personal-wiki",
-            **({"Authorization": f"Bearer {token}"} if token else {}),
+            "User-Agent": "engram",
         },
     )
     with urllib.request.urlopen(req, timeout=20) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
 
-def sync(kb_dir: Path, *, handle: str | None = None, token: str | None = None) -> list[dict[str, Any]]:
+def sync(kb_dir: Path, *, handle: str | None = None) -> list[dict[str, Any]]:
     """Fetch all starred repos for the configured GitHub handle."""
     if handle is None:
         handle = _load_handle(kb_dir)
     if not handle:
         return []
-    if token is None:
-        token = _load_token(kb_dir)
 
     all_items: list[Item] = []
     for page in range(1, MAX_PAGES + 1):
         try:
-            page_data = _fetch_page(handle, page, token)
+            page_data = _fetch_page(handle, page)
         except urllib.error.HTTPError as exc:
             if exc.code == 404:
                 raise RuntimeError(
                     f"GitHub returned 404 for user {handle!r}. "
                     f"Check the handle in sources.json."
-                )
-            if exc.code == 401:
-                raise RuntimeError(
-                    "GitHub rejected the access token (401). Check the "
-                    "GITHUB_TOKEN environment variable or github.token in "
-                    "sources.json."
                 )
             headers = exc.headers
             remaining = (headers.get("x-ratelimit-remaining") or "") if headers else ""
@@ -125,15 +104,10 @@ def sync(kb_dir: Path, *, handle: str | None = None, token: str | None = None) -
             if exc.code == 429 or (
                 exc.code == 403 and (remaining.strip() == "0" or retry_after.strip())
             ):
-                hint = (
-                    "" if token else
-                    " Set a personal access token (GITHUB_TOKEN environment "
-                    "variable, or github.token in sources.json) to raise the "
-                    "limit."
-                )
                 raise RuntimeError(
                     f"GitHub rate-limited us ({exc.code})."
-                    f"{_rate_limit_reset(headers)}{hint}"
+                    f"{_rate_limit_reset(headers)}"
+                    " Unauthenticated requests are limited to 60 per hour."
                 )
             if exc.code == 403:
                 try:
@@ -143,8 +117,7 @@ def sync(kb_dir: Path, *, handle: str | None = None, token: str | None = None) -
                 raise RuntimeError(
                     f"GitHub refused the request (403) for user {handle!r}"
                     + (f": {detail}" if detail else ".")
-                    + " This is not a rate limit; check the token's "
-                    "permissions or whether access is blocked."
+                    + " This is not a rate limit."
                 )
             raise
         if not page_data:
@@ -212,13 +185,10 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="Dump GitHub stars as Items.")
     ap.add_argument("--kb", type=Path, default=Path.cwd())
     ap.add_argument("--handle", help="Override handle from sources.json")
-    ap.add_argument("--token", help="Optional GitHub PAT (env GITHUB_TOKEN also works)")
     ap.add_argument("--limit", type=int, default=5)
     args = ap.parse_args()
 
-    token = args.token or _load_token(args.kb)
-
-    items = sync(args.kb, handle=args.handle, token=token)
+    items = sync(args.kb, handle=args.handle)
     print(f"[github-stars] {len(items)} starred repo(s)")
     for it in items[: args.limit]:
         print(f"  {it['metadata']['repo']} · ⭐{it['engagement']['stars']} · {it['metadata']['language']}")

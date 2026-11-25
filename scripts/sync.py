@@ -379,9 +379,8 @@ def _sync_github_stars(kb: Path) -> int:
         return 0
 
     print(f"[sync] source=github-stars · fetching stars for @{handle}", file=sys.stderr)
-    token = os.environ.get("GITHUB_TOKEN")
     try:
-        items = github_stars.sync(kb, handle=handle, token=token)
+        items = github_stars.sync(kb, handle=handle)
     except RuntimeError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

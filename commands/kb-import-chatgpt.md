@@ -1,6 +1,6 @@
 ---
 description: Import a ChatGPT export zip into this KB (fallback when /engram:kb-sync --source chatgpt breaks)
-argument-hint: <path-to-export.zip>
+argument-hint: "<path-to-export.zip>"
 ---
 
 The user wants to import ChatGPT conversations from an official export zip. This is the fallback path when the live cookie-based sync breaks (endpoint rotation, Cloudflare challenge, etc.).
@@ -14,7 +14,7 @@ The current working directory should be a KB (contain `CLAUDE.md`). If not, tell
 Run:
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/bin/engram-py" scripts/import_export.py \
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/run.sh" scripts/import_export.py \
   --kb "$(pwd)" --provider chatgpt --zip $ARGUMENTS
 ```
 

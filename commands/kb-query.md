@@ -1,6 +1,6 @@
 ---
 description: Answer a question grounded in the current wiki
-argument-hint: <question>
+argument-hint: "<question>"
 ---
 
 The user wants an answer from their wiki. The current working directory should be a engram KB (it should contain a `CLAUDE.md` and a `.engram/` subdirectory). If it doesn't, tell the user to `cd` into their KB first or run `/engram:kb-init` to scaffold one.

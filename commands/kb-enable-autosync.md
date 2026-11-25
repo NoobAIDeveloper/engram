@@ -1,6 +1,6 @@
 ---
 description: Schedule kb-sync to run automatically while Claude Code is open
-argument-hint: [--every <dur>] [--at <HH:MM>] [--sources x,chatgpt,...]
+argument-hint: "[--every <dur>] [--at <HH:MM>] [--sources x,chatgpt,...]"
 ---
 
 The user wants this KB to sync on a schedule using Claude Code's scheduled-task tool (`CronCreate`).
@@ -20,7 +20,7 @@ Create the task with `CronCreate`. Check that tool's own parameter schema (load 
 
 - the 5-field cron expression derived above,
 - recurring: yes,
-- a prompt for the run, with the absolute path filled in: `In <kb-path>, run: "${CLAUDE_PLUGIN_ROOT}/bin/engram-py" scripts/sync.py --kb <kb-path> --source <sources>. Report the per-source counts in one line. Do not run ingest.`
+- a prompt for the run, with the absolute path filled in: `In <kb-path>, run: bash "${CLAUDE_PLUGIN_ROOT}/scripts/run.sh" scripts/sync.py --kb <kb-path> --source <sources>. Report the per-source counts in one line. Do not run ingest.`
 
 If `CronCreate` is not available in this session, say so and stop — do not improvise with OS cron or launchd unless the user asks.
 
