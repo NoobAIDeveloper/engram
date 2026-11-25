@@ -5,7 +5,7 @@
     "email": "jajoo1997@gmail.com"
   },
   "metadata": {
-    "description": "Personal knowledge base \u2014 sync bookmarks, AI chats, and highlights into an Obsidian wiki"
+    "description": "Personal knowledge base — sync bookmarks, AI chats, and highlights into an Obsidian wiki"
   },
   "plugins": [
     {
@@ -14,7 +14,7 @@
         "source": "url",
         "url": "https://github.com/NoobAIDeveloper/engram.git"
       },
-      "description": "Turn your Twitter/X bookmarks, AI chat history, Notion pages, Granola meeting notes, browser bookmarks, GitHub stars, and Kindle highlights into a living Obsidian wiki.",
+      "description": "Turn your Twitter/X bookmarks, AI chat history, Notion pages, browser bookmarks, GitHub stars, and Kindle highlights into a living Obsidian wiki.",
       "author": {
         "name": "Bharat Jaju"
       },

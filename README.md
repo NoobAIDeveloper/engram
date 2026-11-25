@@ -177,7 +177,6 @@ preview). Plain markdown readers work too.
 | `claude-ai` | none | Browser cookies → Claude.ai's backend API. Fallback: manual export + `/engram:kb-import-claude <zip>`. |
 | `claude-code` | none | Reads local Claude Code session logs under `~/.claude/projects/`. |
 | `notion` | integration token | Notion v1 REST API as an internal integration. Long pages split along H1/H2 into chunks. Access is scoped per-page in Notion's UI. |
-| `granola` | optional `content_mode`, `use_api` (macOS only) | Reads Granola's local `cache-v*.json`. By default ingests notes + transcript per meeting (notes heading-chunked, transcript size-windowed). Set `granola.content_mode` to `notes`, `transcript`, `both`, or `auto` in `.engram/sources.json`. `granola.use_api` (default `true`) additionally fetches the AI-enhanced summary from Granola's internal API when available (auth auto-detected from `supabase.json`); works on both free and paid plans, paid users get the richest content. |
 | `browser-bookmarks` | none | Reads Chrome/Brave/Edge bookmark JSON. |
 | `github-stars` | GitHub handle | Public API. `GITHUB_TOKEN` env var optional for higher rate limit. |
 | `kindle` | `--clippings` path | One-shot import from `My Clippings.txt` on the Kindle drive. |
@@ -200,30 +199,6 @@ Notion needs an internal integration token (cookies don't work — Notion's API 
 6. `/engram:kb-sync --source notion`.
 
 Long pages split along H1/H2 headings into multiple chunks; pages without headings fall back to size-based windowing.
-
-### Granola setup
-
-> **Status (Nov 2026): currently broken on up-to-date Granola.** Since mid-2026
-> the Granola desktop app encrypts its local cache (`cache-v*.json.enc`) and
-> keeps the key in an app-only Keychain item, so engram can no longer read
-> meetings from disk. The sync now detects this and says so instead of
-> reporting "0 meetings". Everything below describes the adapter as it works
-> against older, unencrypted caches. Moving to Granola's official API or
-> export is tracked as follow-up work.
-
-macOS only. Granola stores meetings in `~/Library/Application Support/Granola/cache-v*.json`. **No token paste required** — the WorkOS auth token is auto-detected from Granola's own `supabase.json`. Just install Granola and record at least one meeting.
-
-`/engram:kb-add-source granola` asks two questions:
-
-1. **What to ingest** (`content_mode`):
-   - `notes` — only what you typed
-   - `transcript` — only the raw dialogue
-   - `both` (default) — notes first, transcript appended
-   - `auto` — notes if substantive (>200 body chars), else transcript
-
-2. **Use Granola's API for AI-enhanced summaries** (`use_api`, default yes): pulls the richer AI-generated summary panel that doesn't persist to the local cache. Works on both free and paid plans; paid users get the most enhanced content. Set to `no` for purely local operation, no network calls.
-
-Then `/engram:kb-sync --source granola`. Re-running after editing/recording new meetings is incremental.
 
 ---
 
@@ -389,8 +364,10 @@ X has no public bookmark API. The skill does what your browser does:
 
 Implications:
 - You need to be **logged into X in your browser** — the cookies are the auth.
-- Fragile by design. If X rotates their GraphQL query ID or changes cookie
-  encryption, sync breaks until the skill is updated.
+- Fragile by design, with a safety net. X rotates its GraphQL query IDs; the
+  client carries the current and previous ID and, if both are rejected, looks
+  up the current one from a community-maintained table. If X changes the
+  response format or cookie encryption, sync breaks until the plugin is updated.
 - No tokens, no API keys, no developer account required.
 - If you use multiple browsers, pass `--browser chrome|brave|edge` to pin one.
 
@@ -484,9 +461,15 @@ more.
 `type: index` / `type: log`. If your scaffold predates the fix, regenerate
 with `/engram:kb-init ~/new-kb` or edit the types manually.
 
-**X rotated their GraphQL.** The query ID is pinned in
-`scripts/graphql.py`. When it breaks, the fix is updating that constant.
-File an issue.
+**X sync says "X changed its private API".** Run
+`claude plugin update engram@engram` first. The client already tries every
+query ID it knows (`QUERY_PROFILES` in `scripts/graphql.py`) plus a
+community-maintained table (`twitter-openapi`) before giving up, so this
+error means the response format itself changed — please file an issue. To
+add an ID by hand, open x.com/i/bookmarks with DevTools → Network, find the
+`Bookmarks` request, and copy the ID from its URL and the `features`
+parameter into a new `QueryProfile`. Set `ENGRAM_X_NO_REMOTE_PROFILE=1` to
+disable the remote lookup.
 
 ---
 

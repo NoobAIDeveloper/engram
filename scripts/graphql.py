@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
+import os
 import sys
 import time
 import urllib.error
@@ -30,9 +32,11 @@ from typing import Any, Callable, Iterator
 
 
 # ---------------------------------------------------------------------------
-# Constants — copied verbatim from graphql-bookmarks.ts
+# Constants
 # These are PUBLIC values that every X.com web user sends in their browser.
-# Twitter rejects requests with mismatched feature flags, so do NOT "modernize".
+# X identifies each GraphQL operation by a rotating query id and rejects
+# requests whose feature flags don't match that id, so an id and its flag set
+# always travel together as a QueryProfile (see QUERY_PROFILES below).
 # ---------------------------------------------------------------------------
 
 X_PUBLIC_BEARER = (
@@ -40,7 +44,7 @@ X_PUBLIC_BEARER = (
     "1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA"
 )
 
-BOOKMARKS_QUERY_ID = "Z9GWmP0kP2dajyckAaDUBw"
+BOOKMARKS_QUERY_ID = "Z9GWmP0kP2dajyckAaDUBw"  # legacy profile (2024-era id)
 BOOKMARKS_OPERATION = "Bookmarks"
 
 CHROME_UA = (
@@ -76,6 +80,80 @@ GRAPHQL_FEATURES: dict[str, bool] = {
     "view_counts_everywhere_api_enabled": True,
 }
 
+# Flag set the X web client sent with the Bookmarks operation as recorded on
+# 2026-11-20. Keep in sync with the query id in QUERY_PROFILES.
+GRAPHQL_FEATURES_2026_11: dict[str, bool] = {
+    "rweb_video_screen_enabled": False,
+    "rweb_cashtags_enabled": True,
+    "profile_label_improvements_pcf_label_in_post_enabled": True,
+    "responsive_web_profile_redirect_enabled": True,
+    "rweb_tipjar_consumption_enabled": False,
+    "verified_phone_label_enabled": False,
+    "creator_subscriptions_tweet_preview_api_enabled": True,
+    "responsive_web_graphql_timeline_navigation_enabled": True,
+    "premium_content_api_read_enabled": False,
+    "communities_web_enable_tweet_community_results_fetch": True,
+    "c9s_tweet_anatomy_moderator_badge_enabled": True,
+    "responsive_web_grok_analyze_button_fetch_trends_enabled": False,
+    "responsive_web_grok_analyze_post_followups_enabled": True,
+    "rweb_cashtags_composer_attachment_enabled": True,
+    "responsive_web_jetfuel_frame": True,
+    "rweb_sports_post_context_enabled": True,
+    "x_elections_post_context_enabled": True,
+    "responsive_web_grok_share_attachment_enabled": True,
+    "responsive_web_grok_annotations_enabled": True,
+    "articles_preview_enabled": True,
+    "responsive_web_edit_tweet_api_enabled": True,
+    "rweb_conversational_replies_downvote_enabled": False,
+    "graphql_is_translatable_rweb_tweet_is_translatable_enabled": True,
+    "view_counts_everywhere_api_enabled": True,
+    "longform_notetweets_consumption_enabled": True,
+    "responsive_web_twitter_article_tweet_consumption_enabled": True,
+    "content_disclosure_indicator_enabled": True,
+    "content_disclosure_ai_generated_indicator_enabled": True,
+    "responsive_web_grok_show_grok_translated_post": True,
+    "responsive_web_grok_analysis_button_from_backend": True,
+    "post_ctas_fetch_enabled": True,
+    "freedom_of_speech_not_reach_fetch_enabled": True,
+    "standardized_nudges_misinfo": True,
+    "tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled": True,
+    "longform_notetweets_rich_text_read_enabled": True,
+    "longform_notetweets_inline_media_enabled": False,
+    "responsive_web_nested_quote_preview_enabled": True,
+    "responsive_web_grok_image_annotation_enabled": True,
+    "responsive_web_grok_imagine_annotation_enabled": True,
+    "responsive_web_made_on_x_label_enabled": False,
+    "responsive_web_grok_community_note_auto_translation_is_enabled": True,
+    "responsive_web_enhance_cards_enabled": False,
+}
+
+
+@dataclass(frozen=True)
+class QueryProfile:
+    """One (query id, feature flags) pair X accepts for the Bookmarks query."""
+
+    name: str
+    query_id: str
+    features: dict[str, bool]
+
+
+# Tried in order on the first page; the first one X accepts is used for the
+# whole run. To add a new one when X rotates again: open x.com/i/bookmarks
+# with DevTools → Network, find the `Bookmarks` request, and copy the id from
+# its URL path and the decoded `features` query parameter.
+QUERY_PROFILES: tuple[QueryProfile, ...] = (
+    QueryProfile("2026-11", "fjf5b5Lu82lYMSBRhppK2g", GRAPHQL_FEATURES_2026_11),
+    QueryProfile("legacy", BOOKMARKS_QUERY_ID, GRAPHQL_FEATURES),
+)
+
+# Last resort when every built-in profile is rejected: a community-maintained
+# table of X's current query ids and flags. Only a query id (validated) and
+# boolean flags are read from it. Set ENGRAM_X_NO_REMOTE_PROFILE=1 to disable.
+REMOTE_PROFILE_URL = (
+    "https://raw.githubusercontent.com/fa0311/twitter-openapi/main/"
+    "src/config/placeholder.json"
+)
+
 DEFAULT_PAGE_COUNT = 20
 MAX_STALE_PAGES = 3  # stop after this many consecutive pages with nothing new
 TWITTER_EPOCH_MS = 1288834974657
@@ -108,20 +186,25 @@ def _log(msg: str) -> None:
     print(msg, file=sys.stderr, flush=True)
 
 
-def _build_url(cursor: str | None, count: int = DEFAULT_PAGE_COUNT) -> str:
+def _build_url(
+    cursor: str | None,
+    count: int = DEFAULT_PAGE_COUNT,
+    profile: QueryProfile | None = None,
+) -> str:
     """Build the GraphQL request URL with variables and features in the query string."""
+    profile = profile or QUERY_PROFILES[-1]
     variables: dict[str, Any] = {"count": count}
     if cursor:
         variables["cursor"] = cursor
     params = urllib.parse.urlencode(
         {
             "variables": json.dumps(variables, separators=(",", ":")),
-            "features": json.dumps(GRAPHQL_FEATURES, separators=(",", ":")),
+            "features": json.dumps(profile.features, separators=(",", ":")),
         }
     )
     return (
         f"https://x.com/i/api/graphql/"
-        f"{BOOKMARKS_QUERY_ID}/{BOOKMARKS_OPERATION}?{params}"
+        f"{profile.query_id}/{BOOKMARKS_OPERATION}?{params}"
     )
 
 
@@ -164,8 +247,8 @@ class QueryIdStaleError(RuntimeError):
 def _stale_query_message(detail: str) -> str:
     return (
         f"X rejected the Bookmarks query ({detail}). X has most likely changed "
-        f"its private API: BOOKMARKS_QUERY_ID ({BOOKMARKS_QUERY_ID!r}) or the "
-        f"feature flags in scripts/graphql.py are out of date, and the engram "
+        f"its private API: the query ids / feature flags in QUERY_PROFILES "
+        f"(scripts/graphql.py) are out of date, and the engram "
         f"plugin needs updating. Nothing was synced; your existing data is untouched."
     )
 
@@ -307,6 +390,59 @@ def _fetch_page(url: str, headers: dict[str, str]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+def _timeline(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """Locate the timeline object. Historically at
+    data.bookmark_timeline_v2.timeline; tolerate X renaming the middle key by
+    accepting any data.<key>.timeline that carries instructions."""
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, dict):
+        return None
+    preferred = _get(data, "bookmark_timeline_v2", "timeline")
+    if isinstance(preferred, dict):
+        return preferred
+    for value in data.values():
+        tl = value.get("timeline") if isinstance(value, dict) else None
+        if isinstance(tl, dict) and "instructions" in tl:
+            return tl
+    return None
+
+
+def _remote_profile() -> QueryProfile | None:
+    """Fetch the current Bookmarks query id + flags from REMOTE_PROFILE_URL.
+    Returns None on any problem — this is strictly best-effort."""
+    if os.environ.get("ENGRAM_X_NO_REMOTE_PROFILE"):
+        return None
+    try:
+        req = urllib.request.Request(REMOTE_PROFILE_URL, headers={"user-agent": "engram"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            table = json.loads(resp.read(2_000_000).decode("utf-8"))
+        entry = table[BOOKMARKS_OPERATION]
+        query_id = entry["queryId"]
+        features = entry["features"]
+    except Exception as exc:  # noqa: BLE001 — network, JSON, shape: all non-fatal
+        _log(f"[graphql] could not fetch a fresh query profile: {type(exc).__name__}")
+        return None
+    if not (isinstance(query_id, str) and re.fullmatch(r"[A-Za-z0-9_-]{16,40}", query_id)):
+        return None
+    if not isinstance(features, dict) or not features:
+        return None
+    clean = {str(k): v for k, v in features.items() if isinstance(v, bool)}
+    if any(p.query_id == query_id for p in QUERY_PROFILES):
+        return None  # nothing newer than what we already tried
+    return QueryProfile("remote", query_id, clean)
+
+
+def _candidate_profiles() -> Iterator[QueryProfile]:
+    forced = os.environ.get("ENGRAM_X_PROFILE")  # for testing one profile
+    for profile in QUERY_PROFILES:
+        if not forced or forced == profile.name:
+            yield profile
+    if not forced or forced == "remote":
+        remote = _remote_profile()
+        if remote is not None:
+            yield remote
+
+
 def _find_entries_and_cursor(payload: dict[str, Any]) -> tuple[list[dict], str | None]:
     """
     Walk the GraphQL response and return (tweet_entries, next_cursor).
@@ -316,7 +452,7 @@ def _find_entries_and_cursor(payload: dict[str, Any]) -> tuple[list[dict], str |
     Cursor is the `content.value` of the `cursor-bottom-*` entry.
     """
     # `data`, `bookmark_timeline_v2` and `timeline` can each be null.
-    timeline = _get(payload, "data", "bookmark_timeline_v2", "timeline", default={})
+    timeline = _timeline(payload) or {}
     instructions = timeline.get("instructions") if isinstance(timeline, dict) else None
     entries: list[dict] = []
     for instr in instructions if isinstance(instructions, list) else []:
@@ -658,31 +794,47 @@ def fetch_bookmarks(opts: FetchOptions) -> Iterator[dict]:
     stale_pages = 0
     opts.truncated = False
 
-    for page in range(1, opts.max_pages + 1):
-        url = _build_url(cursor, count=DEFAULT_PAGE_COUNT)
-        _log(f"[graphql] page {page} cursor={cursor!s:.60}")
-
-        payload = _fetch_page(url, headers)
+    def get_page(profile: QueryProfile) -> tuple[list[dict], str | None]:
+        payload = _fetch_page(_build_url(cursor, DEFAULT_PAGE_COUNT, profile), headers)
         if not isinstance(payload, dict):
             payload = {}
         entries, next_cursor = _find_entries_and_cursor(payload)
-
         # A 200 with top-level `errors` is NOT an empty timeline. If there is
         # no timeline at all, the query itself was rejected (rotated query
         # id / feature flags). If real entries came along, keep them.
         errors = payload.get("errors")
+        has_timeline = _timeline(payload) is not None
         if errors:
             detail = _describe_errors(errors)
-            has_timeline = isinstance(
-                _get(payload, "data", "bookmark_timeline_v2", "timeline"), dict
-            )
             if not entries and not has_timeline:
                 raise QueryIdStaleError(_stale_query_message(f"errors: {detail}"))
             _log(f"[graphql] response carried errors alongside data: {detail}")
-        elif not entries and not next_cursor and not isinstance(
-            _get(payload, "data", "bookmark_timeline_v2", "timeline"), dict
-        ):
+        elif not entries and not next_cursor and not has_timeline:
             _log("[graphql] warning: response had no bookmark timeline object")
+        return entries, next_cursor
+
+    profile: QueryProfile | None = None
+
+    for page in range(1, opts.max_pages + 1):
+        _log(f"[graphql] page {page} cursor={cursor!s:.60}")
+
+        if profile is None:
+            # First page: find a query profile X still accepts.
+            last_err: QueryIdStaleError | None = None
+            for candidate in _candidate_profiles():
+                try:
+                    entries, next_cursor = get_page(candidate)
+                except QueryIdStaleError as exc:
+                    _log(f"[graphql] query profile {candidate.name!r} rejected; trying next")
+                    last_err = exc
+                    continue
+                profile = candidate
+                _log(f"[graphql] using query profile {candidate.name!r}")
+                break
+            if profile is None:
+                raise last_err or QueryIdStaleError(_stale_query_message("no usable profile"))
+        else:
+            entries, next_cursor = get_page(profile)
 
         now = _now_iso()
         page_records: list[dict] = []

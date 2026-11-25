@@ -178,7 +178,7 @@ def drop_items_by_id_prefix(kb_dir: Path, prefix: str) -> int:
 
 # ---- chunking helpers ------------------------------------------------------
 #
-# Long-form sources (Notion pages, meeting transcripts) are split into N
+# Long-form sources (e.g. Notion pages) are split into N
 # semantically-bounded chunks and each chunk becomes its own Item. Every
 # chunk carries light parent context so a single chunk remains readable in
 # isolation during synthesis. Id format: `<source>:<parent_id>:<chunk_index>`.

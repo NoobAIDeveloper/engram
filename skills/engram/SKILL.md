@@ -1,11 +1,11 @@
 ---
 name: engram
-description: Manage a personal knowledge base built from a user's Twitter/X bookmarks, ChatGPT and Claude.ai conversation history, Claude Code sessions, Notion pages, Granola meeting notes, browser bookmarks, GitHub stars, and Kindle highlights. Sync from logged-in browser sessions, APIs, and local app caches, cluster by topic, and synthesize an interlinked Obsidian wiki. Activate when the user is in an engram KB directory (one with a CLAUDE.md that names this skill, or with a `.engram/` subdirectory) or asks to sync, ingest, query, lint, recluster, or otherwise work with their wiki.
+description: Manage a personal knowledge base built from a user's Twitter/X bookmarks, ChatGPT and Claude.ai conversation history, Claude Code sessions, Notion pages, browser bookmarks, GitHub stars, and Kindle highlights. Sync from logged-in browser sessions, APIs, and local app caches, cluster by topic, and synthesize an interlinked Obsidian wiki. Activate when the user is in an engram KB directory (one with a CLAUDE.md that names this skill, or with a `.engram/` subdirectory) or asks to sync, ingest, query, lint, recluster, or otherwise work with their wiki.
 ---
 
 # engram
 
-You are operating a personal knowledge base built from a user's own saved content: Twitter/X bookmarks, AI chat history (ChatGPT, Claude.ai, Claude Code), Notion pages, Granola meeting notes, browser bookmarks, GitHub stars, and Kindle highlights. Every source is normalized into one JSONL item store. A deterministic Python script clusters items into topic batches using a topic map that **you** generate from the user's actual content. You then synthesize each batch into a wiki page (frontmatter + TLDR + body + counter-arguments + wikilinks) inside an Obsidian vault.
+You are operating a personal knowledge base built from a user's own saved content: Twitter/X bookmarks, AI chat history (ChatGPT, Claude.ai, Claude Code), Notion pages, browser bookmarks, GitHub stars, and Kindle highlights. Every source is normalized into one JSONL item store. A deterministic Python script clusters items into topic batches using a topic map that **you** generate from the user's actual content. You then synthesize each batch into a wiki page (frontmatter + TLDR + body + counter-arguments + wikilinks) inside an Obsidian vault.
 
 The scripts handle the mechanical work (auth, fetching, clustering, lint checks, stats). You handle judgment: classifying topics, synthesizing insights, writing prose, fixing semantic issues.
 
@@ -35,7 +35,7 @@ The user's KB directory:
 - `CLAUDE.md` — KB-level config & rules. Loaded automatically.
 - `.engram/cluster-map.json` — topic → match rules. **You generate this on first ingest.**
 - `.engram/classifications.json` — saved LLM placements for items the rules missed. Written by `apply_classifications.py`, re-applied by every preprocess run.
-- `.engram/sources.json` — per-source config. **May contain API tokens** (Notion, Granola, GitHub): never print its contents, never commit it.
+- `.engram/sources.json` — per-source config. **May contain API tokens** (Notion, GitHub): never print its contents, never commit it.
 - `.engram/*sync-meta.json` — sync cursors. Owned by the scripts. Don't hand-edit.
 - `.engram/ingest-state.json` — tracks which clusters have been synthesized. Owned by you (you update it during ingest).
 
@@ -51,7 +51,7 @@ These slash commands ship with the plugin and each one delegates to a workflow b
 | Command | One-liner |
 |---|---|
 | `/engram:kb-init <path>` | Scaffold a new KB at `<path>` |
-| `/engram:kb-add-source` | Configure a source that needs setup (Notion, Granola, GitHub, …) |
+| `/engram:kb-add-source` | Configure a source that needs setup (Notion, GitHub, …) |
 | `/engram:kb-sync` | Pull new items from one or all sources |
 | `/engram:kb-import-chatgpt` / `/engram:kb-import-claude` | Import an official export zip (fallback when cookie sync is blocked) |
 | `/engram:kb-ingest` | Cluster + synthesize wiki pages from current items |
@@ -142,7 +142,6 @@ When the user asks a question via `/engram:kb-query` (or natural language):
 | `browser-bookmarks` | none | Reads Chrome/Brave/Edge bookmark files, all profiles. |
 | `github-stars` | handle in `sources.json` | Public API; `GITHUB_TOKEN` env var optional for higher rate limit. |
 | `notion` | integration token in `sources.json` | Pages shared with the user's Notion integration. Set up via `/engram:kb-add-source`. |
-| `granola` | see `/engram:kb-add-source` | Meeting notes. Recent Granola versions encrypt their local cache — if the script says so, relay its message; don't retry. |
 | `kindle` | `--clippings <path>` | One-shot import from `My Clippings.txt`. |
 
 ## Sync workflow
