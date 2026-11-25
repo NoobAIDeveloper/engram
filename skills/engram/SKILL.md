@@ -5,92 +5,73 @@ description: Manage a personal knowledge base built from a user's Twitter/X book
 
 # engram
 
-You are operating a personal knowledge base built from a user's Twitter/X bookmarks. Bookmarks are stored as JSONL on disk. A deterministic Python script clusters them into topic batches using a YAML map that **you** generate from the user's actual content. You then synthesize each batch into a wiki page (frontmatter + TLDR + body + counter-arguments + wikilinks) inside an Obsidian vault.
+You are operating a personal knowledge base built from a user's own saved content: Twitter/X bookmarks, AI chat history (ChatGPT, Claude.ai, Claude Code), Notion pages, Granola meeting notes, browser bookmarks, GitHub stars, and Kindle highlights. Every source is normalized into one JSONL item store. A deterministic Python script clusters items into topic batches using a topic map that **you** generate from the user's actual content. You then synthesize each batch into a wiki page (frontmatter + TLDR + body + counter-arguments + wikilinks) inside an Obsidian vault.
 
 The scripts handle the mechanical work (auth, fetching, clustering, lint checks, stats). You handle judgment: classifying topics, synthesizing insights, writing prose, fixing semantic issues.
 
-## Plugin setup
+## Running the bundled scripts
 
-This skill ships as a Claude Code plugin. On first use, ensure the plugin is linked and the Python venv exists:
+Every script is run through the plugin's launcher, which creates its own Python environment on first use (about 10 seconds, once) — never ask the user to install Python packages:
 
 ```bash
-# Link the plugin (one-time — skip if ~/.claude/skills/engram already exists)
-if [ ! -e "$HOME/.claude/skills/engram" ]; then
-  # Prefer CLAUDE_PLUGIN_ROOT (set by Claude Code when a plugin skill runs).
-  INSTALL_PATH="${CLAUDE_PLUGIN_ROOT:-}"
-  if [ -z "$INSTALL_PATH" ]; then
-    INSTALL_PATH=$(python3 - <<'PY' 2>/dev/null
-import json, pathlib
-data = json.loads(pathlib.Path('~/.claude/plugins/installed_plugins.json').expanduser().read_text())
-for pid, recs in data.get('plugins', {}).items():
-    if 'engram' in pid and recs:
-        print(recs[0]['installPath']); break
-PY
-)
-  fi
-  if [ -n "$INSTALL_PATH" ] && [ -d "$INSTALL_PATH" ]; then
-    mkdir -p ~/.claude/skills
-    ln -sf "$INSTALL_PATH" ~/.claude/skills/engram
-  fi
-fi
-# Bootstrap Python venv (one-time)
-if [ ! -d "$HOME/.claude/skills/engram/.venv" ]; then
-  cd ~/.claude/skills/engram
-  python3 -m venv .venv
-  .venv/bin/pip install -q --upgrade pip
-  .venv/bin/pip install -q "cryptography>=42"
-fi
+"${CLAUDE_PLUGIN_ROOT}/bin/engram-py" scripts/<name>.py --kb "$(pwd)" [args]
 ```
 
-After this, all scripts are accessible via `~/.claude/skills/engram/`.
+`${CLAUDE_PLUGIN_ROOT}` is filled in by Claude Code when this skill loads. If you ever see it un-substituted, the launcher is also on `PATH` while the plugin is enabled — run `engram-py scripts/<name>.py …` instead. The only prerequisite is Python 3.10+; if the launcher says it is missing, relay its install hint to the user.
 
 ## Where things live
 
 The user's KB directory:
-- `raw/bookmarks.jsonl` — canonical bookmark store, one JSON per line. **Read-only for you.** Only `sync.py` writes here.
+- `raw/items.jsonl` — canonical item store for **all** sources, one JSON object per line (`id`, `source`, `text`, `author`, `url`, `timestamp`, `engagement`, `metadata`). **Read-only for you.** Only the sync/import scripts write here.
+- `raw/bookmarks.jsonl` — X-only raw store kept for incremental X sync. Read-only. (On KBs created before multi-source support this may be the only store; preprocess handles that.)
 - `raw/bookmarks/<topic>.md` — topic batches derived from `cluster-map.json`. **Do not hand-edit.** Re-run preprocess to regenerate.
 - `raw/bookmarks/_manifest.md` — index of batches with counts. Generated.
+- `raw/bookmarks/_unsorted.md` / `_unsorted.jsonl` — items no rule matched. Generated.
 - `wiki/` — **yours.** Synthesized markdown pages. You write and rewrite freely.
 - `wiki/index.md` — markdown table catalog of all wiki pages. You maintain it.
 - `wiki/log.md` — chronological audit log, newest first. You append to it.
-- `wiki/queries/` — saved query-result pages (created by `/kb-query` when answers are worth keeping).
+- `wiki/queries/` — saved query-result pages (created by `/engram:kb-query` when answers are worth keeping).
 - `notes/` — **user-only.** You NEVER read this directory. You NEVER write to it.
 - `CLAUDE.md` — KB-level config & rules. Loaded automatically.
 - `.engram/cluster-map.json` — topic → match rules. **You generate this on first ingest.**
-- `.engram/sync-meta.json` — sync state. Owned by `sync.py`. Don't hand-edit.
+- `.engram/classifications.json` — saved LLM placements for items the rules missed. Written by `apply_classifications.py`, re-applied by every preprocess run.
+- `.engram/sources.json` — per-source config. **May contain API tokens** (Notion, Granola, GitHub): never print its contents, never commit it.
+- `.engram/*sync-meta.json` — sync cursors. Owned by the scripts. Don't hand-edit.
 - `.engram/ingest-state.json` — tracks which clusters have been synthesized. Owned by you (you update it during ingest).
 
-The skill itself (read-only reference material):
-- `~/.claude/skills/engram/scripts/*.py` — bundled Python scripts. Invoke via `~/.claude/skills/engram/.venv/bin/python <script> --kb $(pwd)` (the venv ships with required deps).
-- `~/.claude/skills/engram/references/*.md` — verbose specs you load on demand via `@references/...`
-- `~/.claude/skills/engram/templates/CLAUDE.md.tmpl` — KB template used by init
+The plugin itself (read-only reference material):
+- `${CLAUDE_PLUGIN_ROOT}/scripts/*.py` — bundled Python scripts, run via the launcher above.
+- `${CLAUDE_PLUGIN_ROOT}/references/*.md` — verbose specs you Read on demand.
+- `${CLAUDE_PLUGIN_ROOT}/templates/CLAUDE.md.tmpl` — KB template used by init.
 
 ## Operations
 
-These slash commands live in `~/.claude/commands/kb-*.md` and each one delegates to a workflow below. The user can also ask in natural language ("sync my bookmarks", "build the wiki") and you should run the matching workflow.
+These slash commands ship with the plugin and each one delegates to a workflow below. The user can also ask in natural language ("sync my bookmarks", "build the wiki") and you should run the matching workflow.
 
 | Command | One-liner |
 |---|---|
-| `/kb-init <path>` | Scaffold a new KB at `<path>` |
-| `/kb-sync` | Pull new bookmarks from the user's browser session |
-| `/kb-ingest` | Cluster + synthesize wiki pages from current bookmarks |
-| `/kb-recluster [hint]` | Re-derive the topic map and regenerate affected pages |
-| `/kb-query <question>` | Answer a question grounded in the wiki |
-| `/kb-lint` | Run lint script and fix what you can |
-| `/kb-status` | Show sync + ingest stats |
+| `/engram:kb-init <path>` | Scaffold a new KB at `<path>` |
+| `/engram:kb-add-source` | Configure a source that needs setup (Notion, Granola, GitHub, …) |
+| `/engram:kb-sync` | Pull new items from one or all sources |
+| `/engram:kb-import-chatgpt` / `/engram:kb-import-claude` | Import an official export zip (fallback when cookie sync is blocked) |
+| `/engram:kb-ingest` | Cluster + synthesize wiki pages from current items |
+| `/engram:kb-recluster [hint]` | Re-derive the topic map and regenerate affected pages |
+| `/engram:kb-query <question>` | Answer a question grounded in the wiki |
+| `/engram:kb-lint` | Run lint script and fix what you can |
+| `/engram:kb-status` | Show sync + ingest stats |
 
 ## Ingest workflow
 
 The most important workflow. Never deviate from this order.
 
 1. **Bootstrap check.** If `.engram/cluster-map.json` does NOT exist:
-   - Load `@~/.claude/skills/engram/references/clustering-guide.md`.
-   - Read a **diversified sample** of `raw/items.jsonl` (or `raw/bookmarks.jsonl` on legacy KBs). Take 15% of each source, clamped to [10, 200] per source. This ensures multi-source KBs get topic coverage from every source, not just the dominant one. See `@~/.claude/skills/engram/references/clustering-guide.md` for diversification rules within each source.
+   - Read `${CLAUDE_PLUGIN_ROOT}/references/clustering-guide.md`.
+   - Read a **diversified sample** of `raw/items.jsonl` (or `raw/bookmarks.jsonl` on legacy KBs). Take 15% of each source, clamped to [10, 200] per source. This ensures multi-source KBs get topic coverage from every source, not just the dominant one. See `${CLAUDE_PLUGIN_ROOT}/references/clustering-guide.md` for diversification rules within each source.
    - Derive **8–20 topics** that fit THIS user's actual content. Topics emerge from what's bookmarked — never from a generic preset. If the user bookmarks recipes, cooking topics; if they bookmark trades, finance topics; etc.
-   - Write `.engram/cluster-map.json`. Each topic entry: `name`, `description` (one line), `match` (keywords / hashtags / author handles / regex). See `@~/.claude/skills/engram/references/clustering-guide.md` for format.
+   - Write `.engram/cluster-map.json`. Each topic entry: `name`, `description` (one line), `match` (keywords / hashtags / author handles / regex). See `${CLAUDE_PLUGIN_ROOT}/references/clustering-guide.md` for format.
    - Briefly tell the user what topics you derived and why. Offer them a chance to tweak before proceeding (one round of edits, then move on).
 
-2. **Run preprocess.** `~/.claude/skills/engram/.venv/bin/python ~/.claude/skills/engram/scripts/preprocess.py --kb $(pwd)`. This writes `raw/bookmarks/<topic>.md` files and `_manifest.md`. Bookmarks matching nothing land in `_unsorted.md`.
+2. **Run preprocess.** `"${CLAUDE_PLUGIN_ROOT}/bin/engram-py" scripts/preprocess.py --kb "$(pwd)"`. This writes `raw/bookmarks/<topic>.md` files and `_manifest.md`. Bookmarks matching nothing land in `_unsorted.md`.
 
 3. **Read existing state.**
    - Read `wiki/index.md` (or note it doesn't exist yet).
@@ -99,8 +80,8 @@ The most important workflow. Never deviate from this order.
 4. **For each topic batch in `raw/bookmarks/`:**
    - Skip `_manifest.md` and `_unsorted.md` (the unsorted file is for your awareness, not synthesis).
    - If the batch is new OR has grown since last ingest, synthesize/update `wiki/<topic>.md`.
-   - Follow `@~/.claude/skills/engram/references/extraction-rules.md` for the synthesis approach.
-   - Required structure (see `@~/.claude/skills/engram/references/frontmatter-schema.md`):
+   - Follow `${CLAUDE_PLUGIN_ROOT}/references/extraction-rules.md` for the synthesis approach.
+   - Required structure (see `${CLAUDE_PLUGIN_ROOT}/references/frontmatter-schema.md`):
      - YAML frontmatter (title, type, sources, created, updated, tags)
      - **TLDR** section (3–5 sentence high-density summary)
      - Body grouped by sub-theme, with author attributions and short quotes for high-engagement tweets (>1000 likes)
@@ -117,7 +98,7 @@ The most important workflow. Never deviate from this order.
 
 ## Recluster workflow
 
-When the user runs `/kb-recluster` (optionally with a natural-language hint like "merge two topics" or "split out finance from business"):
+When the user runs `/engram:kb-recluster` (optionally with a natural-language hint like "merge two topics" or "split out finance from business"):
 
 1. Back up the existing map: `cp .engram/cluster-map.json .engram/cluster-map.json.bak`.
 2. Read the current `cluster-map.json`, current `_manifest.md`, and `wiki/index.md`.
@@ -134,7 +115,7 @@ When the user runs `/kb-recluster` (optionally with a natural-language hint like
 
 ## Query workflow
 
-When the user asks a question via `/kb-query` (or natural language):
+When the user asks a question via `/engram:kb-query` (or natural language):
 
 1. Read `wiki/index.md` to find candidate pages.
 2. Read the relevant pages (don't read everything).
@@ -144,7 +125,7 @@ When the user asks a question via `/kb-query` (or natural language):
 
 ## Lint workflow
 
-1. Run `~/.claude/skills/engram/.venv/bin/python ~/.claude/skills/engram/scripts/lint.py --kb $(pwd)`. It returns a structured report of issues (missing frontmatter, missing TLDR, missing counter-args on concept pages, broken wikilinks, orphan pages, stale pages).
+1. Run `"${CLAUDE_PLUGIN_ROOT}/bin/engram-py" scripts/lint.py --kb "$(pwd)"`. It returns a structured report of issues (missing frontmatter, missing TLDR, missing counter-args on concept pages, broken wikilinks, orphan pages, stale pages).
 2. For each issue, decide: can you fix it autonomously? If yes, fix it. If no (e.g. requires content judgment beyond what's in the existing pages), report it to the user.
 3. Append to `wiki/log.md` under `lint`.
 
@@ -154,20 +135,24 @@ When the user asks a question via `/kb-query` (or natural language):
 
 | Source | Config | Notes |
 |---|---|---|
-| `x` | none | Browser cookies from chrome/brave/edge. The original source. |
-| `chatgpt` | none | Browser cookies from chatgpt.com. Q+A pairs. Fallback: `/kb-request-chatgpt-export` + `/kb-import-chatgpt <zip>`. |
-| `claude-ai` | none | Browser cookies from claude.ai. Q+A pairs. Fallback: manual export + `/kb-import-claude <zip>`. |
+| `x` | none | Browser cookies from Chrome/Brave/Edge (macOS, Linux). The original source. |
+| `chatgpt` | none | Browser cookies from chatgpt.com. Q+A pairs. Fallback: `/engram:kb-request-chatgpt-export` + `/engram:kb-import-chatgpt <zip>`. |
+| `claude-ai` | none | Browser cookies from claude.ai. Q+A pairs. Fallback: manual export + `/engram:kb-import-claude <zip>`. |
 | `claude-code` | none | Walks `~/.claude/projects/` session logs. |
-| `browser-bookmarks` | none | Reads Chrome/Brave/Edge bookmark JSON. |
+| `browser-bookmarks` | none | Reads Chrome/Brave/Edge bookmark files, all profiles. |
 | `github-stars` | handle in `sources.json` | Public API; `GITHUB_TOKEN` env var optional for higher rate limit. |
+| `notion` | integration token in `sources.json` | Pages shared with the user's Notion integration. Set up via `/engram:kb-add-source`. |
+| `granola` | see `/engram:kb-add-source` | Meeting notes. Recent Granola versions encrypt their local cache — if the script says so, relay its message; don't retry. |
 | `kindle` | `--clippings <path>` | One-shot import from `My Clippings.txt`. |
 
 ## Sync workflow
 
-1. Run `~/.claude/skills/engram/.venv/bin/python ~/.claude/skills/engram/scripts/sync.py --kb $(pwd) [--source <name>]`. Default source is `x`. Source adapters handle their own cookie extraction, pagination, and dedupe; outputs land in `raw/items.jsonl` (or `raw/bookmarks.jsonl` for `x`) with `.engram/<source>-sync-meta.json` cursors.
+1. Run `"${CLAUDE_PLUGIN_ROOT}/bin/engram-py" scripts/sync.py --kb "$(pwd)" [--source <name>]`. Default source is `x`. Source adapters handle their own cookie extraction, pagination, and dedupe; outputs land in `raw/items.jsonl` (or `raw/bookmarks.jsonl` for `x`) with `.engram/<source>-sync-meta.json` cursors.
 2. Report new item count.
-3. If new items were added, suggest `/kb-ingest`.
-4. If sync failed with auth error, tell the user to re-login in the browser for that source.
+3. If new items were added, suggest `/engram:kb-ingest`.
+4. If sync failed with an auth error, tell the user to re-login in the browser for that source.
+5. If the X sync reports that X changed its private API (exit code 6), the plugin itself needs an update: `claude plugin update engram@engram`. Do not retry or try to patch query IDs yourself.
+6. A sync that fails part-way keeps what it already fetched ("sync incomplete"); re-running continues from there.
 
 ## Hard invariants — never break these
 
@@ -177,7 +162,7 @@ When the user asks a question via `/kb-query` (or natural language):
 - **Wikilinks use `[[double-brackets]]`.** External links use markdown `[text](url)`.
 - **Topics emerge from the user's actual bookmarks.** Never assume a domain. Never hardcode topic categories. Re-derive from content every time.
 - **Preprocess never runs without `cluster-map.json`.** If it's missing, bootstrap it first by reading bookmarks and writing the map.
-- **Sync state files in `.engram/` are owned by scripts.** Don't hand-edit `sync-meta.json`. You may edit `cluster-map.json` (you generated it) and `ingest-state.json` (you maintain it).
+- **Sync state files in `.engram/` are owned by scripts.** Don't hand-edit `*sync-meta.json` or `classifications.json`. You may edit `cluster-map.json` (you generated it) and `ingest-state.json` (you maintain it).
 - **High-engagement tweets get direct quotes.** If a tweet has >1000 likes, include a short verbatim quote (with attribution) in the wiki page rather than just paraphrasing.
 - **Don't ingest into a wiki page if the source batch hasn't changed.** Check `ingest-state.json` first. Avoid redundant LLM work.
 
@@ -191,4 +176,4 @@ Then proceed normally. This is a one-time migration — the old name is no longe
 
 ## On context efficiency
 
-This SKILL.md is loaded into your context whenever you operate on an engram KB. Detailed schemas, taxonomies, and rule sets live in `references/*.md` and are loaded only when you actually need them. When you're doing a small operation like `/kb-status`, do NOT pull in the references — they're not needed. When you're doing `/kb-ingest`, load `extraction-rules.md`, `frontmatter-schema.md`, and (on bootstrap) `clustering-guide.md`, and nothing else.
+This SKILL.md is loaded into your context whenever you operate on an engram KB. Detailed schemas, taxonomies, and rule sets live in `references/*.md` and are loaded only when you actually need them. When you're doing a small operation like `/engram:kb-status`, do NOT pull in the references — they're not needed. When you're doing `/engram:kb-ingest`, load `extraction-rules.md`, `frontmatter-schema.md`, and (on bootstrap) `clustering-guide.md`, and nothing else.

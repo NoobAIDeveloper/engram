@@ -68,7 +68,7 @@ def init_kb(
     if not template_path.exists():
         print(f"error: template not found at {template_path}", file=sys.stderr)
         sys.exit(3)
-    template = template_path.read_text()
+    template = template_path.read_text(encoding="utf-8")
     rendered = render_template(
         template,
         {
@@ -77,24 +77,32 @@ def init_kb(
             "created_date": dt.date.today().isoformat(),
         },
     )
-    claude_md.write_text(rendered)
+    claude_md.write_text(rendered, encoding="utf-8")
+
+    def write_if_absent(path: Path, content: str) -> None:
+        # --force re-renders CLAUDE.md only. Everything else may already
+        # hold the user's work (wiki index, activity log, their notes).
+        if not path.exists():
+            path.write_text(content, encoding="utf-8")
 
     # .gitignore
     gitignore_src = TEMPLATES / "gitignore.tmpl"
     if gitignore_src.exists():
-        (kb_path / ".gitignore").write_text(gitignore_src.read_text())
+        write_if_absent(kb_path / ".gitignore", gitignore_src.read_text(encoding="utf-8"))
 
     # Obsidian config
     if obsidian:
         obs_src = TEMPLATES / "obsidian"
         obs_dst = kb_path / ".obsidian"
         for f in obs_src.glob("*.json"):
-            shutil.copy2(f, obs_dst / f.name)
+            if not (obs_dst / f.name).exists():
+                shutil.copy2(f, obs_dst / f.name)
 
     # Stub wiki/index.md and wiki/log.md so the directory isn't empty and
     # so Claude has something to read on first session startup.
     today = dt.date.today().isoformat()
-    (kb_path / "wiki" / "index.md").write_text(
+    write_if_absent(
+        kb_path / "wiki" / "index.md",
         f"""---
 title: "Knowledge Base Index"
 type: index
@@ -102,15 +110,16 @@ created: {today}
 updated: {today}
 ---
 
-**TLDR:** Master catalog of all wiki pages. Empty until first `/kb-ingest`.
+**TLDR:** Master catalog of all wiki pages. Empty until first `/engram:kb-ingest`.
 
 | Page | Type | Tags | TLDR |
 |---|---|---|---|
 
-(no pages yet — run `/kb-sync` then `/kb-ingest` to populate)
+(no pages yet — run `/engram:kb-sync` then `/engram:kb-ingest` to populate)
 """
     )
-    (kb_path / "wiki" / "log.md").write_text(
+    write_if_absent(
+        kb_path / "wiki" / "log.md",
         f"""---
 title: "Activity Log"
 type: log
@@ -127,7 +136,8 @@ updated: {today}
     )
 
     # README in notes/ explaining the boundary
-    (kb_path / "notes" / "README.md").write_text(
+    write_if_absent(
+        kb_path / "notes" / "README.md",
         """# notes/
 
 This directory is **yours**. Personal notes, drafts, journals, anything.
@@ -159,8 +169,8 @@ If you want Claude to see something, put it in the conversation directly.
     print("Next steps:")
     print(f"  cd {kb_path}")
     print("  claude")
-    print("  /kb-sync       # pull bookmarks from your browser")
-    print("  /kb-ingest     # bootstrap topics + build the wiki")
+    print("  /engram:kb-sync       # pull bookmarks from your browser")
+    print("  /engram:kb-ingest     # bootstrap topics + build the wiki")
 
 
 def main() -> None:

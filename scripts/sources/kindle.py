@@ -19,6 +19,7 @@ we keep highlights and notes, skip pure bookmark entries (no text body).
 
 from __future__ import annotations
 
+import hashlib
 import re
 from datetime import datetime
 from pathlib import Path
@@ -36,23 +37,42 @@ _META_RE = re.compile(
     re.IGNORECASE,
 )
 
+# English-locale shapes only (US and UK devices). Weekday is stripped before
+# matching, so these start at the month/day.
 _DATE_FORMATS = (
-    "%A, %B %d, %Y %I:%M:%S %p",
-    "%A, %d %B %Y %H:%M:%S",
-    "%A, %B %d, %Y",
+    "%B %d, %Y %I:%M:%S %p",
+    "%B %d, %Y %I:%M %p",
+    "%B %d, %Y %H:%M:%S",
+    "%d %B %Y %H:%M:%S",
+    "%d %B %Y %I:%M:%S %p",
+    "%d %B %Y %H:%M",
+    "%B %d, %Y",
+    "%d %B %Y",
 )
+
+_WEEKDAY_RE = re.compile(r"^[^\W\d_]+,?\s+(?=\S+\s+\S+)")
 
 
 def _parse_date(s: str | None) -> str:
+    """Parse a clipping date to ISO-8601, or "" if we can't.
+
+    Never returns the raw string: a non-ISO timestamp would sort wrongly
+    downstream, and an empty one is handled everywhere.
+    """
     if not s:
         return ""
-    s = s.strip()
-    for fmt in _DATE_FORMATS:
-        try:
-            return datetime.strptime(s, fmt).isoformat()
-        except ValueError:
-            continue
-    return s  # return raw if we can't parse
+    s = " ".join(s.replace("\u202f", " ").replace("\xa0", " ").split())
+    candidates = [s]
+    stripped = _WEEKDAY_RE.sub("", s, count=1)
+    if stripped != s:
+        candidates.append(stripped)
+    for cand in candidates:
+        for fmt in _DATE_FORMATS:
+            try:
+                return datetime.strptime(cand, fmt).isoformat()
+            except ValueError:
+                continue
+    return ""
 
 
 def _parse_entry(block: str) -> dict[str, Any] | None:
@@ -114,11 +134,12 @@ def sync(kb_dir: Path | None, *, clippings_path: Path) -> list[dict[str, Any]]:
 
     entries = parse_clippings(path)
     items: list[Item] = []
-    # Dedupe by (title, body) hash so re-importing the same file doesn't
-    # create duplicate Items.
-    seen: set[tuple[str, str]] = set()
-    for i, entry in enumerate(entries):
-        key = (entry["title"], entry["body"][:200])
+    # Dedupe exact duplicates (same book + same text). The id is a stable
+    # content hash of that key — NOT hash(), which is salted per process —
+    # so re-importing the same file yields the same ids.
+    seen: set[str] = set()
+    for entry in entries:
+        key = f"{entry['title']}\x00{entry['body']}"
         if key in seen:
             continue
         seen.add(key)
@@ -132,7 +153,7 @@ def sync(kb_dir: Path | None, *, clippings_path: Path) -> list[dict[str, Any]]:
 
         items.append(
             Item(
-                id=f"{SOURCE_ID}:{abs(hash(key))}",
+                id=f"{SOURCE_ID}:{hashlib.sha1(key.encode('utf-8')).hexdigest()[:16]}",
                 source=SOURCE_ID,
                 text=text,
                 timestamp=entry["timestamp"],

@@ -1,6 +1,6 @@
 # Extraction rules
 
-Loaded during `/kb-ingest` and `/kb-recluster`. Defines how to turn a
+Loaded during `/engram:kb-ingest` and `/engram:kb-recluster`. Defines how to turn a
 `raw/bookmarks/<topic>.md` batch into a `wiki/<topic>.md` page.
 
 The batch is a list of bookmarks pre-routed by `preprocess.py`. Your

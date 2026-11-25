@@ -26,7 +26,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -159,7 +159,9 @@ def _request(
             except Exception:
                 err_body = ""
             raise RuntimeError(f"Notion {method} {path} → {exc.code}: {err_body}") from exc
-        except urllib.error.URLError as exc:
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            # URLError covers connect failures; a timeout while *reading*
+            # the body surfaces as a bare TimeoutError/OSError instead.
             if attempt < max_retries:
                 time.sleep(2 ** attempt)
                 attempt += 1
@@ -330,6 +332,11 @@ def sync(
         )
         return []
 
+    # Cursor for the NEXT run: this run's start, minus a minute. Pages edited
+    # while we're fetching must be picked up next time, and Notion's
+    # last_edited_time only has minute granularity.
+    run_started = datetime.now(timezone.utc) - timedelta(seconds=60)
+
     meta = _load_meta(kb_dir)
     last_synced_at = None if full else meta.get("last_synced_at")
 
@@ -355,6 +362,7 @@ def sync(
     all_items: list[Item] = []
     pages_seen = 0
     pages_changed = 0
+    pages_failed = 0
 
     for page in _search_pages(token):
         pages_seen += 1
@@ -379,6 +387,7 @@ def sync(
             blocks = _get_blocks(page["id"], token)
         except Exception as exc:
             print(f"[notion] page {page['id']} fetch failed: {exc}", file=sys.stderr)
+            pages_failed += 1
             continue
 
         # Drop stale chunks for this page before emitting fresh ones.
@@ -421,17 +430,31 @@ def sync(
         all_items.extend(items)
         pages_changed += 1
 
-    # Stamp a fresh sync cursor.
-    now = datetime.now(timezone.utc).isoformat()
-    _write_meta(kb_dir, {
-        "last_synced_at": now,
+    # Stamp a fresh sync cursor — unless a page fetch failed, in which case
+    # the cursor stays put so the failed page(s) are retried next run
+    # instead of being skipped as "unchanged since last sync".
+    new_meta: dict[str, Any] = {
+        "last_synced_at": run_started.isoformat(),
         "last_run_pages_seen": pages_seen,
         "last_run_pages_changed": pages_changed,
-    })
+        "last_run_pages_failed": pages_failed,
+    }
+    if pages_failed:
+        prev = meta.get("last_synced_at")
+        if prev:
+            new_meta["last_synced_at"] = prev
+        else:
+            del new_meta["last_synced_at"]
+    _write_meta(kb_dir, new_meta)
 
     print(
         f"[notion] {pages_seen} page(s) seen · {pages_changed} changed · "
-        f"{len(all_items)} chunk(s) emitted",
+        f"{len(all_items)} chunk(s) emitted"
+        + (
+            f" · {pages_failed} page(s) FAILED — sync cursor not advanced; "
+            f"they will be retried on the next run"
+            if pages_failed else ""
+        ),
         file=sys.stderr,
     )
     return [it.to_json() for it in all_items]

@@ -58,11 +58,9 @@ def _rewrite_x_items(kb: Path, merged_bookmarks: list[dict]) -> int:
     number of X items now in the file.
     """
     items_path = _items_path(kb)
-    try:
-        existing = load_items(items_path)
-    except ValueError as exc:
-        print(f"warning: items.jsonl unreadable, rebuilding: {exc}", file=sys.stderr)
-        existing = []
+    # load_items skips (and backs up) malformed lines rather than raising,
+    # so a damaged file never causes other sources' items to be dropped.
+    existing = load_items(items_path)
     non_x = [it for it in existing if it.get("source") != X_SOURCE_ID]
     x_items = bookmarks_to_items(merged_bookmarks)
     combined, _ = merge_items(non_x, x_items)
@@ -80,12 +78,15 @@ def _load_jsonl(path: Path) -> list[dict]:
             if not line:
                 continue
             try:
-                out.append(json.loads(line))
+                rec = json.loads(line)
             except json.JSONDecodeError as exc:
                 print(
                     f"warning: skipping malformed line in {path}: {exc}",
                     file=sys.stderr,
                 )
+                continue
+            if isinstance(rec, dict):
+                out.append(rec)
     return out
 
 
@@ -166,7 +167,12 @@ def sync(
 ) -> int:
     # Lazy imports — cryptography is only needed for the X source.
     from cookies import extract_twitter_cookies, list_available_browsers
+    import graphql
     from graphql import AuthError, FetchOptions, RateLimitError, fetch_bookmarks
+
+    # Raised when X answers with "unknown query" — i.e. the private API
+    # moved. Older graphql.py builds don't define it.
+    QueryIdStaleError = getattr(graphql, "QueryIdStaleError", None)
 
     jsonl_path, meta_path, _state_dir = _kb_paths(kb)
 
@@ -180,8 +186,20 @@ def sync(
         file=sys.stderr,
     )
 
+    # Incremental sync stops at the newest bookmark we already have. That is
+    # only safe once a run has walked the whole timeline: if the first sync
+    # was interrupted or hit --max-pages, stopping at the top would strand
+    # every older bookmark forever. Metas written before this flag existed
+    # are assumed complete so existing KBs keep syncing incrementally.
+    backfill_done = bool(meta.get("backfillComplete", bool(meta)))
     stop_at_id: str | None = None
-    if not full:
+    if not full and existing and not backfill_done:
+        print(
+            "[sync] previous sync did not reach the end of your bookmarks; "
+            "continuing the full walk",
+            file=sys.stderr,
+        )
+    elif not full:
         stop_at_id = _newest_id(existing)
         if stop_at_id:
             print(
@@ -202,7 +220,7 @@ def sync(
     except NotImplementedError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
-    except RuntimeError as exc:
+    except Exception as exc:  # keychain timeout, decrypt failure, locked DB…
         print(f"error: {exc}", file=sys.stderr)
         return 3
 
@@ -218,6 +236,10 @@ def sync(
     )
 
     fetched: list[dict] = []
+    # Every failure below still falls through to the persist step: pages we
+    # already fetched are kept, and `failure_rc` becomes the exit code.
+    failure_rc = 0
+    interrupted = False
     try:
         for rec in fetch_bookmarks(opts):
             fetched.append(rec)
@@ -227,19 +249,43 @@ def sync(
             f"stale — log out and back into X in your browser, then retry.",
             file=sys.stderr,
         )
-        return 4
+        failure_rc = 4
     except RateLimitError as exc:
         print(
             f"error: rate limited and exhausted retries ({exc}). Try again later.",
             file=sys.stderr,
         )
-        return 5
+        failure_rc = 5
     except KeyboardInterrupt:
         print(
             f"\n[sync] interrupted; got {len(fetched)} bookmarks before exit",
             file=sys.stderr,
         )
-        # Fall through and persist what we have
+        interrupted = True
+    except Exception as exc:
+        if QueryIdStaleError is not None and isinstance(exc, QueryIdStaleError):
+            print(
+                f"error: {exc}\nX changed its private bookmarks API. Update the "
+                f"engram plugin (`claude plugin update engram@engram`); if you "
+                f"are already on the latest version, please open an issue at "
+                f"https://github.com/NoobAIDeveloper/engram/issues.",
+                file=sys.stderr,
+            )
+            failure_rc = 6
+        else:
+            print(
+                f"error: X sync failed ({type(exc).__name__}: {exc}).",
+                file=sys.stderr,
+            )
+            failure_rc = 7
+
+    if failure_rc and not fetched:
+        return failure_rc
+    if failure_rc:
+        print(
+            f"[sync] keeping the {len(fetched)} bookmark(s) fetched before the error",
+            file=sys.stderr,
+        )
 
     print(f"[sync] fetched {len(fetched)} records this run", file=sys.stderr)
 
@@ -264,6 +310,10 @@ def sync(
         "totalBookmarks": len(merged),
         "lastRunAdded": added,
         "lastRunFetched": len(fetched),
+        # True once some run has walked to the end of the timeline (or to
+        # bookmarks we already had). See the incremental-stop note above.
+        "backfillComplete": backfill_done
+        or not (failure_rc or interrupted or getattr(opts, "truncated", False)),
     }
     _atomic_write(meta_path, json.dumps(new_meta, indent=2) + "\n")
 
@@ -278,6 +328,9 @@ def sync(
             rel = str(jsonl_path)
     except ValueError:
         rel = str(jsonl_path)
+    if failure_rc:
+        print(f"sync incomplete: {added} new saved before the error, {len(merged)} total → {rel}")
+        return failure_rc
     print(f"sync complete: {added} new, {len(merged)} total → {rel}")
     return 0
 
@@ -531,7 +584,7 @@ def _sync_claude_code(kb: Path, *, include_self: bool = False) -> int:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Sync data from one or more sources into a personal-wiki KB."
+        description="Sync data from one or more sources into an engram KB."
     )
     parser.add_argument(
         "--kb",
@@ -613,8 +666,11 @@ def main() -> None:
                 print(f"error: unknown source {src!r}", file=sys.stderr)
                 rc = 64
         except Exception as exc:  # noqa: BLE001 — isolate per-source failures
-            print(f"error: source {src!r} crashed: {exc}", file=sys.stderr)
+            print(f"error: source {src!r} failed: {exc}", file=sys.stderr)
             rc = 1
+        if rc != 0:
+            # Stdout contract: one summary line per source, success or not.
+            print(f"sync failed: {src} (exit {rc}) — see the error above")
         if rc != 0:
             exit_code = rc
             # Keep going with other sources even if one fails.

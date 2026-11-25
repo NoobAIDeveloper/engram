@@ -9,6 +9,7 @@ TypeScript to Python, keeping the exact PBKDF2 + AES-128-CBC parameters.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import shutil
 import sqlite3
@@ -110,6 +111,24 @@ def _cookie_db_path(browser: Browser, profile: str = "Default") -> Path:
     return base / "Cookies"
 
 
+def _profiles_with_cookies(browser: Browser) -> list[str]:
+    """Profile dir names that have a cookie DB: ``Default`` first, then
+    ``Profile N`` in numeric order."""
+    root = _user_data_dir(browser)
+    names = ["Default"]
+    try:
+        extra = [p.name for p in root.glob("Profile *") if p.is_dir()]
+    except OSError:
+        extra = []
+
+    def _order(name: str) -> tuple[int, str]:
+        tail = name[len("Profile "):]
+        return (int(tail) if tail.isdigit() else sys.maxsize, name)
+
+    names.extend(sorted(extra, key=_order))
+    return [n for n in names if _cookie_db_path(browser, n).exists()]
+
+
 # ── Key derivation ──────────────────────────────────────────────────────────
 
 
@@ -158,7 +177,7 @@ def _run(argv: list[str], timeout: float = 5.0, raise_on_timeout: bool = False) 
     return out or None
 
 
-def _macos_key(browser: Browser) -> bytes:
+def _macos_key(browser: Browser, site_label: str = "X") -> bytes:
     for service, account in browser.keychain_entries:
         pw = _run(
             ["security", "find-generic-password", "-w", "-s", service, "-a", account],
@@ -169,7 +188,7 @@ def _macos_key(browser: Browser) -> bytes:
             return _pbkdf2(pw.encode("utf-8"), MAC_ITERATIONS)
     raise RuntimeError(
         f"Could not read {browser.display_name} Safe Storage password from the macOS Keychain. "
-        f"Open the browser profile logged into X at least once, then retry. "
+        f"Open the browser profile logged into {site_label} at least once, then retry. "
         f"You may be prompted to allow 'security' to access the keychain entry."
     )
 
@@ -190,12 +209,15 @@ def _linux_keys(browser: Browser) -> tuple[bytes, bytes | None]:
 
 
 def _pkcs7_unpad(data: bytes) -> bytes:
-    if not data:
-        return data
-    pad = data[-1]
-    if 1 <= pad <= 16 and data[-pad:] == bytes([pad]) * pad:
-        return data[:-pad]
-    return data
+    """Strict PKCS7 unpad. Invalid padding means the key was wrong (or the
+    ciphertext is corrupt), so raise instead of returning garbage."""
+    pad = data[-1] if data else 0
+    if not (1 <= pad <= 16) or len(data) < pad or data[-pad:] != bytes([pad]) * pad:
+        raise RuntimeError(
+            "Cookie decryption produced invalid padding — the browser's Safe "
+            "Storage key did not match this cookie."
+        )
+    return data[:-pad]
 
 
 def _decrypt_value(
@@ -203,6 +225,7 @@ def _decrypt_value(
     v10_key: bytes,
     v11_key: bytes | None,
     db_version: int,
+    host_key: str = "",
 ) -> str:
     if not encrypted:
         return ""
@@ -233,11 +256,20 @@ def _decrypt_value(
     plaintext = _pkcs7_unpad(plaintext)
 
     # Chrome DB version >= 24 (roughly Chrome 130+) prepends SHA256(host_key)
-    # to the plaintext. The first 32 bytes are a hash we must discard.
-    if db_version >= 24 and len(plaintext) > 32:
-        plaintext = plaintext[32:]
+    # to the plaintext. Strip it only when it really is that hash — the meta
+    # version alone is not proof (db_version is kept for the signature only).
+    if len(plaintext) >= 32 and host_key:
+        if plaintext[:32] == hashlib.sha256(host_key.encode("utf-8")).digest():
+            plaintext = plaintext[32:]
 
-    return plaintext.decode("utf-8", errors="replace")
+    try:
+        return plaintext.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        # A wrong key (or an unrecognised plaintext layout) lands here.
+        raise RuntimeError(
+            "Cookie decrypted to bytes that are not valid text — the browser's "
+            "Safe Storage key did not match, or the cookie format changed."
+        ) from exc
 
 
 # ── SQLite access ───────────────────────────────────────────────────────────
@@ -255,25 +287,55 @@ def _copy_db(src: Path) -> Path:
     return dst
 
 
+def _domains(host_patterns: tuple[str, ...]) -> list[str]:
+    """Normalize host patterns to bare domains, preserving order.
+
+    Accepts ``"x.com"``, ``".x.com"`` and the legacy LIKE form ``"%x.com"``.
+    """
+    out: list[str] = []
+    for pat in host_patterns:
+        domain = pat.lstrip("%").lstrip(".").lower()
+        if domain and domain not in out:
+            out.append(domain)
+    return out
+
+
 def _query_cookies(
     db_path: Path,
-    host_patterns: tuple[str, ...] = ("%x.com", "%twitter.com"),
-) -> tuple[list[tuple[str, bytes]], int]:
-    """Return (rows, db_version). rows is list of (name, encrypted_value).
+    host_patterns: tuple[str, ...] = ("x.com", "twitter.com"),
+) -> tuple[list[tuple[str, bytes, str]], int]:
+    """Return (rows, db_version). rows is list of (name, encrypted_value,
+    host_key), ordered so earlier-listed domains come first.
 
-    host_patterns: SQL LIKE patterns matched against the cookies.host_key
-    column. Defaults to the X/Twitter hosts for backward compatibility.
+    host_patterns: domains matched EXACTLY against cookies.host_key — only
+    ``<domain>`` and ``.<domain>`` match (never ``netflix.com`` for
+    ``x.com``, and never a subdomain, whose cookies the browser would not
+    send to the bare domain either). Defaults to the X/Twitter hosts.
     """
+    domains = _domains(host_patterns)
+    rank: dict[str, int] = {}
+    for idx, domain in enumerate(domains):
+        rank[domain] = idx
+        rank["." + domain] = idx
+    if not rank:
+        return [], 0
+
     tmp_db = _copy_db(db_path)
     try:
         conn = sqlite3.connect(str(tmp_db))
         try:
-            clause = " OR ".join(["host_key LIKE ?"] * len(host_patterns))
+            clause = ", ".join(["?"] * len(rank))
             cur = conn.execute(
-                f"SELECT name, encrypted_value FROM cookies WHERE {clause}",
-                host_patterns,
+                "SELECT name, encrypted_value, host_key FROM cookies "
+                f"WHERE lower(host_key) IN ({clause})",
+                tuple(rank),
             )
-            rows = [(r[0], bytes(r[1]) if r[1] is not None else b"") for r in cur.fetchall()]
+            rows = [
+                (r[0], bytes(r[1]) if r[1] is not None else b"", r[2] or "")
+                for r in cur.fetchall()
+            ]
+            # First-listed domain wins when a name exists on several hosts.
+            rows.sort(key=lambda r: rank.get(r[2].lower(), len(rank)))
             db_version = 0
             try:
                 vrow = conn.execute("SELECT value FROM meta WHERE key='version'").fetchone()
@@ -293,11 +355,11 @@ def _query_cookies(
 
 
 def list_available_browsers() -> list[str]:
-    """Return browser ids whose cookie DB exists on disk."""
+    """Return browser ids with a cookie DB on disk (in any profile)."""
     available: list[str] = []
     for browser in BROWSERS:
         try:
-            if _cookie_db_path(browser).exists():
+            if _profiles_with_cookies(browser):
                 available.append(browser.id)
         except NotImplementedError:
             return []
@@ -364,8 +426,10 @@ def extract_cookies(
     """Generic cookie extractor. Same semantics as extract_twitter_cookies
     but parameterized on which hosts and cookie names we care about.
 
-    host_patterns are SQL LIKE strings matched against cookies.host_key
-    (e.g. ``("%chat.openai.com", "%chatgpt.com")``).
+    host_patterns are domains matched exactly against cookies.host_key
+    (``chatgpt.com`` matches ``chatgpt.com`` and ``.chatgpt.com`` only),
+    e.g. ``("chatgpt.com", "chat.openai.com")``. When the same cookie name
+    exists for several of them, the first-listed domain wins.
 
     ``wanted_names`` must all be found or we raise. ``optional_names``
     are returned if present but never required — use this for
@@ -379,7 +443,7 @@ def extract_cookies(
     if not (sys.platform == "darwin" or sys.platform.startswith("linux")):
         raise NotImplementedError(f"Unsupported platform: {sys.platform}")
 
-    label = site_label or ", ".join(h.lstrip("%") for h in host_patterns)
+    label = site_label or ", ".join(_domains(host_patterns))
 
     if browser == "auto":
         candidates = list_available_browsers()
@@ -420,25 +484,62 @@ def extract_cookies(
 def _extract_for(
     browser: Browser,
     *,
-    host_patterns: tuple[str, ...] = ("%x.com", "%twitter.com"),
+    host_patterns: tuple[str, ...] = ("x.com", "twitter.com"),
     wanted_names: set[str] | None = None,
     optional_names: set[str] | None = None,
     site_label: str = "x.com / twitter.com",
 ) -> dict[str, str]:
-    db_path = _cookie_db_path(browser)
-    if not db_path.exists():
+    profiles = _profiles_with_cookies(browser)
+    if not profiles:
         raise FileNotFoundError(
-            f"{browser.display_name} Cookies DB not found at {db_path}. "
-            f"Install the browser and open it at least once, or use a non-default profile "
-            f"(not supported in v1)."
+            f"{browser.display_name} Cookies DB not found at {_cookie_db_path(browser)} "
+            f"(nor in any 'Profile N' directory). Install the browser and open it "
+            f"at least once."
         )
 
     if sys.platform == "darwin":
-        v10_key = _macos_key(browser)
+        v10_key = _macos_key(browser, site_label)
         v11_key: bytes | None = None
     else:
         v10_key, v11_key = _linux_keys(browser)
 
+    # Default first, then Profile N: the first profile that actually holds the
+    # required cookies wins.
+    errors: list[tuple[str, RuntimeError]] = []
+    for profile in profiles:
+        try:
+            return _extract_from_profile(
+                browser,
+                profile,
+                v10_key,
+                v11_key,
+                host_patterns=host_patterns,
+                wanted_names=wanted_names,
+                optional_names=optional_names,
+                site_label=site_label,
+            )
+        except RuntimeError as exc:
+            errors.append((profile, exc))
+    if len(errors) == 1:
+        raise errors[0][1]
+    raise RuntimeError(
+        f"No {browser.display_name} profile yielded cookies for {site_label}: "
+        + " | ".join(f"[{profile}] {exc}" for profile, exc in errors)
+    )
+
+
+def _extract_from_profile(
+    browser: Browser,
+    profile: str,
+    v10_key: bytes,
+    v11_key: bytes | None,
+    *,
+    host_patterns: tuple[str, ...],
+    wanted_names: set[str] | None,
+    optional_names: set[str] | None,
+    site_label: str,
+) -> dict[str, str]:
+    db_path = _cookie_db_path(browser, profile)
     try:
         rows, db_version = _query_cookies(db_path, host_patterns=host_patterns)
     except (sqlite3.Error, OSError) as exc:
@@ -451,15 +552,18 @@ def _extract_for(
     optional = optional_names or set()
     interesting = wanted | optional
     results: dict[str, str] = {}
-    for name, encrypted in rows:
-        if name not in interesting:
+    # rows are ordered by domain preference; the first non-empty value wins.
+    for name, encrypted, host_key in rows:
+        if name not in interesting or name in results:
             continue
         try:
-            value = _decrypt_value(encrypted, v10_key, v11_key, db_version)
+            value = _decrypt_value(encrypted, v10_key, v11_key, db_version, host_key)
         except Exception as exc:  # noqa: BLE001 - surface as RuntimeError
             raise RuntimeError(
-                f"Decryption failed for cookie {name!r} in {browser.display_name}: {exc}. "
-                f"This is usually a Chrome version mismatch — please file a bug."
+                f"Decryption failed for cookie {name!r} ({host_key}) in "
+                f"{browser.display_name} profile {profile!r}: {exc} "
+                f"If the browser was just updated, this may be a Chrome version "
+                f"mismatch — please file a bug."
             ) from exc
         value = value.rstrip("\x00").strip()
         if value:
@@ -468,9 +572,10 @@ def _extract_for(
     missing = wanted - results.keys()
     if missing:
         raise RuntimeError(
-            f"Found cookies in {browser.display_name} but missing {sorted(missing)} "
-            f"for {site_label}. You are probably not logged into that site in this "
-            f"browser — open {browser.display_name}, log into it, and retry."
+            f"Found cookies in {browser.display_name} (profile {profile!r}) but "
+            f"missing {sorted(missing)} for {site_label}. You are probably not "
+            f"logged into that site in this browser — open {browser.display_name}, "
+            f"log into it, and retry."
         )
     return results
 

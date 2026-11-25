@@ -37,7 +37,8 @@ from sources.base import Item  # noqa: E402
 
 
 SOURCE_ID = "claude-ai"
-HOST_PATTERNS = ("%claude.ai",)
+# Exact domain (cookies.py matches "claude.ai" and ".claude.ai" only).
+HOST_PATTERNS = ("claude.ai",)
 SESSION_COOKIE = "sessionKey"
 COOKIE_NAMES = {SESSION_COOKIE}
 BASE = "https://claude.ai"
@@ -163,6 +164,13 @@ def _list_conversations(
             break
         offset += PAGE_SIZE
         time.sleep(0.3)
+    else:
+        print(
+            f"[claude-ai] warning: conversation list truncated at "
+            f"MAX_CONVERSATIONS={hard_limit}; conversations beyond that were "
+            f"not listed and will not be synced.",
+            file=sys.stderr,
+        )
     return out
 
 
@@ -305,7 +313,10 @@ def sync(
     all_conv_summaries.sort(key=lambda pair: pair[1].get("updated_at") or "")
 
     all_items: list[Item] = []
-    newest_update_time = stop_at or ""
+    done_update_times: list[str] = []
+    # updated_at of the oldest conversation whose fetch failed; the cursor
+    # must stay below it so the next sync retries it.
+    oldest_failed: str | None = None
     halt_msg: str | None = None
     for i, (org_id, summary) in enumerate(all_conv_summaries, 1):
         conv_uuid = summary.get("uuid")
@@ -335,8 +346,19 @@ def sync(
                 )
                 time.sleep(wait)
             except Exception as exc:  # noqa: BLE001
-                print(f"[claude-ai] skip conversation {conv_uuid}: {exc}", file=sys.stderr)
                 skip = True
+                failed_ut = summary.get("updated_at") or ""
+                # A 404 is a conversation deleted since listing: nothing to retry.
+                if str(exc).startswith("HTTP 404 ") or not failed_ut:
+                    print(f"[claude-ai] skip conversation {conv_uuid}: {exc}", file=sys.stderr)
+                else:
+                    print(
+                        f"[claude-ai] skip conversation {conv_uuid} (will retry "
+                        f"next sync): {exc}",
+                        file=sys.stderr,
+                    )
+                    if oldest_failed is None or failed_ut < oldest_failed:
+                        oldest_failed = failed_ut
                 break
         if halt_msg:
             break
@@ -351,12 +373,19 @@ def sync(
             )
             break
         all_items.extend(_pair_turns(conv))
-        ut = summary.get("updated_at") or ""
-        if ut > newest_update_time:
-            newest_update_time = ut
+        done_update_times.append(summary.get("updated_at") or "")
         if i % 10 == 0:
             print(f"[claude-ai] fetched {i}/{len(all_conv_summaries)}", file=sys.stderr)
         time.sleep(random.uniform(4.0, 7.0))
+
+    # Advance the cursor only over conversations we actually fetched: stay
+    # strictly below the oldest failed one (listing skips updated_at <= cursor).
+    newest_update_time = stop_at or ""
+    for ut in done_update_times:
+        if oldest_failed is not None and ut >= oldest_failed:
+            continue
+        if ut > newest_update_time:
+            newest_update_time = ut
 
     if newest_update_time:
         meta_path.write_text(

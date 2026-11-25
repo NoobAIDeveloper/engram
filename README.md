@@ -64,9 +64,24 @@ claude plugin marketplace add NoobAIDeveloper/engram
 claude plugin install engram@engram
 ```
 
-That's it. The Python venv and dependencies are set up automatically on first use.
+That's it. The Python environment and dependencies are set up automatically
+the first time a command runs (about 10 seconds, once). The only requirement
+is Python 3.10+, which macOS and most Linux distros already have.
 
-### Option B: Manual install
+Commands are namespaced under the plugin: `/engram:kb-sync`, `/engram:kb-ingest`, …
+
+**Updating:** `claude plugin update engram@engram`. X, ChatGPT and Claude.ai
+change their private APIs without notice — if a sync starts failing, update
+first.
+
+**Installed before December 2026?** Older releases pinned a version number
+that never changed, so your copy stopped receiving updates. Run the update
+command above once; if it reports "already at the latest version", run
+`claude plugin marketplace update engram` and try again. If you used the old
+`./install.sh` (symlinks into `~/.claude/`), run the new `./install.sh` once
+— it removes those links and installs the plugin properly.
+
+### Option B: From a clone
 
 ```bash
 git clone https://github.com/NoobAIDeveloper/engram ~/src/engram
@@ -74,10 +89,11 @@ cd ~/src/engram
 ./install.sh
 ```
 
-This symlinks the skill into `~/.claude/skills/engram` and the slash
-commands into `~/.claude/commands/`. Edits to the repo are live — no rebuild.
+`install.sh` just runs the two commands from Option A (and cleans up links
+left by older versions). To hack on engram and run it straight from your
+checkout, use `claude --plugin-dir ~/src/engram`.
 
-Uninstall: `./install.sh --uninstall`.
+Uninstall: `./install.sh --uninstall` or `claude plugin uninstall engram@engram`.
 
 ---
 
@@ -86,25 +102,25 @@ Uninstall: `./install.sh --uninstall`.
 ```bash
 # 1. Scaffold a KB. Do this from any shell.
 claude
-> /kb-init ~/my-kb
+> /engram:kb-init ~/my-kb
 
 # 2. Start a fresh Claude session inside the KB so CLAUDE.md loads.
 cd ~/my-kb
 claude
 
 # 3. Pull bookmarks from your browser.
-> /kb-sync
+> /engram:kb-sync
 
 # 4. Let Claude cluster + synthesize.
-> /kb-ingest
+> /engram:kb-ingest
 # On first run, Claude samples your bookmarks, derives 8–20 topics, and shows
 # you the cluster map before proceeding. You get one round of edits.
 
 # 5. Ask questions.
-> /kb-query what do people I follow say about prompt injection?
+> /engram:kb-query what do people I follow say about prompt injection?
 
 # 6. Health check.
-> /kb-lint
+> /engram:kb-lint
 ```
 
 Open `~/my-kb` in Obsidian for the full experience (wikilink graph, page
@@ -116,38 +132,38 @@ preview). Plain markdown readers work too.
 
 **First-time setup with multiple sources.**
 ```
-> /kb-init ~/my-kb
+> /engram:kb-init ~/my-kb
 > cd ~/my-kb && claude                  # fresh session so CLAUDE.md loads
-> /kb-add-source github-stars           # configure what needs config
-> /kb-sync --source all                 # pull everything
-> /kb-ingest                            # cluster + synthesize
+> /engram:kb-add-source github-stars           # configure what needs config
+> /engram:kb-sync --source all                 # pull everything
+> /engram:kb-ingest                            # cluster + synthesize
 ```
 
 **Daily-ish refresh.**
 ```
-> /kb-sync --source all
-> /kb-ingest                            # only regenerates changed batches
+> /engram:kb-sync --source all
+> /engram:kb-ingest                            # only regenerates changed batches
 ```
 
-**Keep it hands-off.** Set autosync once and forget it:
+**Keep it fresh while you work.** Schedule a sync for whenever Claude Code is open:
 ```
-> /kb-enable-autosync --at 07:00 --sources x,chatgpt,claude-ai
+> /engram:kb-enable-autosync --at 07:00 --sources x,chatgpt,claude-ai
 ```
 
 **ChatGPT live sync blocked by Cloudflare.** Use the export path:
 ```
-> /kb-request-chatgpt-export            # OpenAI emails you a zip (hours)
-> /kb-import-chatgpt ~/Downloads/<zip>  # ingest when it arrives
+> /engram:kb-request-chatgpt-export            # OpenAI emails you a zip (hours)
+> /engram:kb-import-chatgpt ~/Downloads/<zip>  # ingest when it arrives
 ```
 
 **Topics feel wrong.** Re-cluster with a hint:
 ```
-> /kb-recluster merge business and entrepreneurship
+> /engram:kb-recluster merge business and entrepreneurship
 ```
 
 **Ask the wiki a question.**
 ```
-> /kb-query what's the consensus in my bookmarks on RAG vs long-context?
+> /engram:kb-query what's the consensus in my bookmarks on RAG vs long-context?
 ```
 
 ---
@@ -157,8 +173,8 @@ preview). Plain markdown readers work too.
 | Source | Config | How it syncs |
 |---|---|---|
 | `x` | none | Browser cookies → X's internal GraphQL. Default source. |
-| `chatgpt` | none | Browser cookies → ChatGPT's backend API. Q+A pairs extracted from conversation history. Fallback: `/kb-request-chatgpt-export` + `/kb-import-chatgpt <zip>`. |
-| `claude-ai` | none | Browser cookies → Claude.ai's backend API. Fallback: manual export + `/kb-import-claude <zip>`. |
+| `chatgpt` | none | Browser cookies → ChatGPT's backend API. Q+A pairs extracted from conversation history. Fallback: `/engram:kb-request-chatgpt-export` + `/engram:kb-import-chatgpt <zip>`. |
+| `claude-ai` | none | Browser cookies → Claude.ai's backend API. Fallback: manual export + `/engram:kb-import-claude <zip>`. |
 | `claude-code` | none | Reads local Claude Code session logs under `~/.claude/projects/`. |
 | `notion` | integration token | Notion v1 REST API as an internal integration. Long pages split along H1/H2 into chunks. Access is scoped per-page in Notion's UI. |
 | `granola` | optional `content_mode`, `use_api` (macOS only) | Reads Granola's local `cache-v*.json`. By default ingests notes + transcript per meeting (notes heading-chunked, transcript size-windowed). Set `granola.content_mode` to `notes`, `transcript`, `both`, or `auto` in `.engram/sources.json`. `granola.use_api` (default `true`) additionally fetches the AI-enhanced summary from Granola's internal API when available (auth auto-detected from `supabase.json`); works on both free and paid plans, paid users get the richest content. |
@@ -166,7 +182,7 @@ preview). Plain markdown readers work too.
 | `github-stars` | GitHub handle | Public API. `GITHUB_TOKEN` env var optional for higher rate limit. |
 | `kindle` | `--clippings` path | One-shot import from `My Clippings.txt` on the Kindle drive. |
 
-Run `/kb-sync --source <name>` or `/kb-sync --source all`. For most sources, `/kb-add-source <name>` walks you through the dialog interactively. The two sources below need a one-time external setup step before the wizard can finish.
+Run `/engram:kb-sync --source <name>` or `/engram:kb-sync --source all`. For most sources, `/engram:kb-add-source <name>` walks you through the dialog interactively. The two sources below need a one-time external setup step before the wizard can finish.
 
 ### Notion setup
 
@@ -175,21 +191,29 @@ Notion needs an internal integration token (cookies don't work — Notion's API 
 1. Go to <https://notion.so/my-integrations> and click **+ New integration**.
 2. Name it (e.g. `engram`), pick the workspace, submit. Default capabilities (read content) are enough.
 3. Copy the **Internal Integration Secret** — starts with `secret_` or `ntn_`.
-4. Run `/kb-add-source notion` from your KB and paste the token when asked, or write it directly:
+4. Run `/engram:kb-add-source notion` from your KB and paste the token when asked, or write it directly:
    ```json
    {"notion": {"token": "secret_..."}}
    ```
    in `.engram/sources.json`.
 5. In Notion, open each page or database you want indexed → `•••` menu → **Connections** → add the integration. Nested pages inherit access.
-6. `/kb-sync --source notion`.
+6. `/engram:kb-sync --source notion`.
 
 Long pages split along H1/H2 headings into multiple chunks; pages without headings fall back to size-based windowing.
 
 ### Granola setup
 
+> **Status (Nov 2026): currently broken on up-to-date Granola.** Since mid-2026
+> the Granola desktop app encrypts its local cache (`cache-v*.json.enc`) and
+> keeps the key in an app-only Keychain item, so engram can no longer read
+> meetings from disk. The sync now detects this and says so instead of
+> reporting "0 meetings". Everything below describes the adapter as it works
+> against older, unencrypted caches. Moving to Granola's official API or
+> export is tracked as follow-up work.
+
 macOS only. Granola stores meetings in `~/Library/Application Support/Granola/cache-v*.json`. **No token paste required** — the WorkOS auth token is auto-detected from Granola's own `supabase.json`. Just install Granola and record at least one meeting.
 
-`/kb-add-source granola` asks two questions:
+`/engram:kb-add-source granola` asks two questions:
 
 1. **What to ingest** (`content_mode`):
    - `notes` — only what you typed
@@ -199,123 +223,128 @@ macOS only. Granola stores meetings in `~/Library/Application Support/Granola/ca
 
 2. **Use Granola's API for AI-enhanced summaries** (`use_api`, default yes): pulls the richer AI-generated summary panel that doesn't persist to the local cache. Works on both free and paid plans; paid users get the most enhanced content. Set to `no` for purely local operation, no network calls.
 
-Then `/kb-sync --source granola`. Re-running after editing/recording new meetings is incremental.
+Then `/engram:kb-sync --source granola`. Re-running after editing/recording new meetings is incremental.
 
 ---
 
 ## Slash commands
 
-Every command is run from inside a Claude Code session. `/kb-init` is the only
+Every command is run from inside a Claude Code session. `/engram:kb-init` is the only
 one you can run from outside a KB — all the others expect you to be `cd`'d into
 a KB directory so `CLAUDE.md` loads.
 
 ### Setup
 
-**`/kb-init <path> [--no-obsidian] [--no-git] [--force]`**
+**`/engram:kb-init <path> [--no-obsidian] [--no-git] [--force]`**
 Scaffolds a new KB at `<path>` — directory tree, `CLAUDE.md`, `.gitignore`,
 Obsidian vault config. Run once per KB, from anywhere.
 ```
-> /kb-init ~/my-kb
+> /engram:kb-init ~/my-kb
 ```
 
-**`/kb-add-source <source-name>`**
+**`/engram:kb-add-source <source-name>`**
 Walks you through per-source config. Most sources need nothing (cookies
 handle auth); `github-stars` needs your handle, `kindle` needs a clippings
 path. Writes to `.engram/sources.json`.
 ```
-> /kb-add-source github-stars
-> /kb-add-source kindle --clippings "/Volumes/Kindle/documents/My Clippings.txt"
+> /engram:kb-add-source github-stars
+> /engram:kb-add-source kindle --clippings "/Volumes/Kindle/documents/My Clippings.txt"
 ```
 
 ### Sync
 
-**`/kb-sync [--source <name>] [--full] [--browser chrome|brave|edge]`**
+**`/engram:kb-sync [--source <name>] [--full] [--browser chrome|brave|edge]`**
 Pulls data from one or more configured sources. Default source is `x`.
 Use `--source all` to run every configured source, or name one explicitly.
 Incremental by default — only new items. Pass `--full` to re-pull everything.
 ```
-> /kb-sync                          # just X bookmarks
-> /kb-sync --source chatgpt         # only ChatGPT
-> /kb-sync --source all             # every configured source
-> /kb-sync --source x --full        # ignore cursor, refetch
+> /engram:kb-sync                          # just X bookmarks
+> /engram:kb-sync --source chatgpt         # only ChatGPT
+> /engram:kb-sync --source all             # every configured source
+> /engram:kb-sync --source x --full        # ignore cursor, refetch
 ```
 
-**`/kb-request-chatgpt-export`**
-Fallback when `/kb-sync --source chatgpt` is Cloudflare-blocked. POSTs to
+**`/engram:kb-request-chatgpt-export`**
+Fallback when `/engram:kb-sync --source chatgpt` is Cloudflare-blocked. POSTs to
 OpenAI's data-export endpoint so they email you a zip. Wait for the email
-(can take hours), then run `/kb-import-chatgpt` on the downloaded file.
+(can take hours), then run `/engram:kb-import-chatgpt` on the downloaded file.
 
-**`/kb-import-chatgpt <path-to-export.zip>`**
+**`/engram:kb-import-chatgpt <path-to-export.zip>`**
 Ingests an OpenAI-issued ChatGPT export zip. Use when live sync fails or
 you want a guaranteed full snapshot.
 ```
-> /kb-import-chatgpt ~/Downloads/chatgpt-export-2026-04.zip
+> /engram:kb-import-chatgpt ~/Downloads/chatgpt-export-2026-04.zip
 ```
 
-**`/kb-import-claude <path-to-export.zip>`**
+**`/engram:kb-import-claude <path-to-export.zip>`**
 Same as above for Claude.ai. Export is manual: Claude.ai → Settings →
 Privacy → Export data.
 
 ### Cluster + synthesize
 
-**`/kb-ingest [topic-name]`**
+**`/engram:kb-ingest [topic-name]`**
 The core loop: cluster items into topic batches, then synthesize a wiki
 page per batch. On first run, samples 15% of each source (clamped [10, 200]
 per source), derives 8–20 topics, and shows you the cluster map before
 proceeding. On subsequent runs, only regenerates pages whose batches grew.
 Pass a topic name to scope synthesis to just that page.
 ```
-> /kb-ingest                        # all batches
-> /kb-ingest finance                # just wiki/finance.md
+> /engram:kb-ingest                        # all batches
+> /engram:kb-ingest finance                # just wiki/finance.md
 ```
-After rule-based routing, if items remain in `_unsorted`, `/kb-ingest`
+After rule-based routing, if items remain in `_unsorted`, `/engram:kb-ingest`
 offers to classify them via a Haiku subagent (uses your Claude Code quota,
 not a separate API key) against the existing topics.
 
-**`/kb-recluster [hint]`**
+**`/engram:kb-recluster [hint]`**
 Re-derives the topic map when topics drift (too big, too small, near-dupes,
 or unsorted items suggest a missing topic). Optional natural-language hint
 guides the re-derivation. Reconciles existing wiki pages — renames, merges,
 splits — preserving content and updating wikilinks.
 ```
-> /kb-recluster
-> /kb-recluster split finance from business
-> /kb-recluster merge llm-evals and ai-tooling
+> /engram:kb-recluster
+> /engram:kb-recluster split finance from business
+> /engram:kb-recluster merge llm-evals and ai-tooling
 ```
 
 ### Query + maintain
 
-**`/kb-query <question>`**
+**`/engram:kb-query <question>`**
 Asks a question grounded in the wiki. Claude reads `wiki/index.md`, opens
 the relevant pages, and answers with wikilink citations. Substantive novel
 answers get saved to `wiki/queries/<slug>.md` so they join the graph.
 ```
-> /kb-query what do people I follow say about prompt injection?
-> /kb-query summarize the best arguments against index investing from my bookmarks
+> /engram:kb-query what do people I follow say about prompt injection?
+> /engram:kb-query summarize the best arguments against index investing from my bookmarks
 ```
 
-**`/kb-lint`**
+**`/engram:kb-lint`**
 Runs the lint script and fixes what it can: missing frontmatter, missing
 TLDRs, missing counter-args on concept pages, broken wikilinks, orphan
 pages. Reports issues requiring judgment.
 
-**`/kb-status`**
+**`/engram:kb-status`**
 One-screen readout: per-source item counts, last sync timestamps, ingest
 freshness (which batches grew since last synthesis), autosync schedule.
 
 ### Autosync
 
-**`/kb-enable-autosync [--every <dur>] [--at <HH:MM>] [--sources x,chatgpt,...]`**
-Schedules `/kb-sync` to run on a cadence via Claude Code's cron support.
+> Autosync uses Claude Code's scheduled tasks, which are **session-scoped**:
+> they fire only while Claude Code is open and idle on your machine, and
+> recurring tasks expire on their own after a few weeks. Treat it as a
+> convenience while you work, not an always-on background service.
+
+**`/engram:kb-enable-autosync [--every <dur>] [--at <HH:MM>] [--sources x,chatgpt,...]`**
+Schedules `/engram:kb-sync` to run on a cadence via Claude Code's cron support.
 ```
-> /kb-enable-autosync --every 6h
-> /kb-enable-autosync --at 07:00 --sources x,chatgpt,claude-ai
+> /engram:kb-enable-autosync --every 6h
+> /engram:kb-enable-autosync --at 07:00 --sources x,chatgpt,claude-ai
 ```
 
-**`/kb-autosync-status`**
+**`/engram:kb-autosync-status`**
 Shows the current schedule, next run, and last run result.
 
-**`/kb-disable-autosync`**
+**`/engram:kb-disable-autosync`**
 Cancels the scheduled auto-sync for the current KB.
 
 ---
@@ -338,7 +367,7 @@ my-kb/
 ├── wiki/                              # Claude's output. Synthesized pages.
 │   ├── index.md                       # Catalog table
 │   ├── log.md                         # Chronological audit log
-│   ├── queries/                       # Saved /kb-query answers
+│   ├── queries/                       # Saved /engram:kb-query answers
 │   └── <topic>.md
 ├── notes/                             # Yours. The skill never reads this.
 └── .obsidian/                         # Obsidian vault config
@@ -369,7 +398,7 @@ Implications:
 
 ## How clustering actually works
 
-There is **no built-in topic list**. On first `/kb-ingest`:
+There is **no built-in topic list**. On first `/engram:kb-ingest`:
 
 1. Claude samples 15% of each source (clamped [10, 200] per source) from your
    items corpus with diversity across time, authors, and hashtags.
@@ -384,7 +413,7 @@ There is **no built-in topic list**. On first `/kb-ingest`:
    bookmark can land in multiple batches (a tweet about "LLM evals in
    finance" lands in both an ML topic and a finance topic).
 
-`/kb-recluster` re-runs the derivation when topics drift. You can pass a hint
+`/engram:kb-recluster` re-runs the derivation when topics drift. You can pass a hint
 like `"merge business and entrepreneurship"` and Claude will reconcile the
 wiki pages — renames, merges, splits — preserving content and updating
 wikilinks.
@@ -423,37 +452,37 @@ and [`references/frontmatter-schema.md`](references/frontmatter-schema.md).
 
 ## Troubleshooting
 
-**`/kb-sync` fails with an auth error.** Cookies are stale. Log out and back
+**`/engram:kb-sync` fails with an auth error.** Cookies are stale. Log out and back
 into X in your browser, then retry. If the browser wasn't running recently,
 the cookie database may be locked — close it.
 
-**`/kb-sync` fails with "keychain dialog timed out".** On the first sync, macOS
+**`/engram:kb-sync` fails with "keychain dialog timed out".** On the first sync, macOS
 pops a dialog asking permission for `security` to read the browser's Safe
 Storage password. You now have 2 minutes to enter your password — but if you
-miss it, just rerun `/kb-sync`. **Tip:** click **Always Allow** the first time
+miss it, just rerun `/engram:kb-sync`. **Tip:** click **Always Allow** the first time
 so you're never prompted again.
 
-**`/kb-sync` says no browser found.** The skill looks for Chrome, Brave, and
+**`/engram:kb-sync` says no browser found.** The skill looks for Chrome, Brave, and
 Edge at their standard paths on macOS/Linux. Make sure you're logged in.
 
-**`/kb-sync --source chatgpt` fails with a Cloudflare block.** CF puts the
+**`/engram:kb-sync --source chatgpt` fails with a Cloudflare block.** CF puts the
 session in cooldown. Visit chatgpt.com in your browser once (to refresh
 `cf_clearance`), wait a few minutes, and retry. If it keeps happening, use
-the export fallback: `/kb-request-chatgpt-export` → wait for email →
-`/kb-import-chatgpt <zip>`.
+the export fallback: `/engram:kb-request-chatgpt-export` → wait for email →
+`/engram:kb-import-chatgpt <zip>`.
 
-**`/kb-sync --source chatgpt` hits a 429 rate-limit.** The adapter
+**`/engram:kb-sync --source chatgpt` hits a 429 rate-limit.** The adapter
 auto-retries with backoff; a single run of ~200 conversations takes ~20 min.
 If it halts anyway, just rerun — sync is incremental and resumes.
 
-**Sync works but `/kb-ingest` never starts clustering.** Check that
+**Sync works but `/engram:kb-ingest` never starts clustering.** Check that
 `raw/bookmarks.jsonl` has content. On very small corpora (<20 bookmarks),
 Claude may ask whether you really want to cluster yet — wait until you have
 more.
 
 **Lint errors on `wiki/index.md` or `wiki/log.md`.** These should pass as
 `type: index` / `type: log`. If your scaffold predates the fix, regenerate
-with `./install.sh && /kb-init ~/new-kb` or edit the types manually.
+with `/engram:kb-init ~/new-kb` or edit the types manually.
 
 **X rotated their GraphQL.** The query ID is pinned in
 `scripts/graphql.py`. When it breaks, the fix is updating that constant.
@@ -469,11 +498,11 @@ engram/
 │   ├── plugin.json
 │   └── marketplace.json
 ├── skills/engram/SKILL.md         # The skill manifest — loaded into Claude's context
-├── install.sh                     # Manual installer (symlinks into ~/.claude/)
+├── install.sh                     # Wrapper around `claude plugin install`
 ├── bin/engram-py                  # Self-bootstrapping Python runner
 ├── commands/                      # Slash command definitions
 │   └── kb-*.md
-├── scripts/                       # Python scripts, invoked via the bundled .venv
+├── scripts/                       # Python scripts, run via bin/engram-py (self-bootstrapping venv)
 │   ├── init.py                    # Scaffold a KB
 │   ├── sync.py                    # Pull bookmarks from X
 │   ├── cookies.py                 # Browser cookie extraction (internal)

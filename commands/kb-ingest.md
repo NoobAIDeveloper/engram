@@ -3,14 +3,14 @@ description: Cluster bookmarks and synthesize wiki pages from the current KB
 argument-hint: [topic-name]
 ---
 
-The user wants to ingest items into the wiki. The current working directory should be a engram KB (it should contain a `CLAUDE.md` and a `.engram/` subdirectory). If it doesn't, tell the user to `cd` into their KB first or run `/kb-init` to scaffold one.
+The user wants to ingest items into the wiki. The current working directory should be a engram KB (it should contain a `CLAUDE.md` and a `.engram/` subdirectory). If it doesn't, tell the user to `cd` into their KB first or run `/engram:kb-init` to scaffold one.
 
-Also confirm `raw/items.jsonl` (or legacy `raw/bookmarks.jsonl`) exists and is non-empty. If it's missing or empty, tell the user to run `/kb-sync` first and stop.
+Also confirm `raw/items.jsonl` (or legacy `raw/bookmarks.jsonl`) exists and is non-empty. If it's missing or empty, tell the user to run `/engram:kb-sync` first and stop.
 
 Then follow the **Ingest workflow** in SKILL.md end to end. In particular:
 
 - If `.engram/cluster-map.json` does not exist, do the bootstrap step (sample items with the per-source 15% / [10, 200] rule described in SKILL.md, derive topics, write the map, confirm with the user) before running preprocess.
-- Run `~/.claude/skills/engram/.venv/bin/python ~/.claude/skills/engram/scripts/preprocess.py --kb $(pwd)` once the map is in place.
+- Run `"${CLAUDE_PLUGIN_ROOT}/bin/engram-py" scripts/preprocess.py --kb "$(pwd)"` once the map is in place.
 - Synthesize or update wiki pages per the workflow, consulting `ingest-state.json` to skip batches that haven't grown.
 
 ## Optional: LLM-classify the _unsorted bucket
@@ -28,9 +28,8 @@ Only proceed if the user agrees. Then:
 2. After the subagent finishes, apply its output:
 
    ```bash
-   ~/.claude/skills/engram/.venv/bin/python \
-     ~/.claude/skills/engram/scripts/apply_classifications.py \
-     --kb $(pwd) \
+   "${CLAUDE_PLUGIN_ROOT}/bin/engram-py" scripts/apply_classifications.py \
+     --kb "$(pwd)" \
      --classifications raw/bookmarks/_classifications.json
    ```
 
@@ -42,4 +41,4 @@ If the main model is already Haiku, the subagent still pins Haiku explicitly —
 
 If `$ARGUMENTS` names a single topic (kebab-case), scope the synthesis step to just that topic's batch — still run preprocess in full, but only (re)write `wiki/<topic>.md` and refresh `index.md` / `log.md` accordingly. Otherwise process all changed batches.
 
-When done, report what was created vs updated vs skipped, and flag anything still in `_unsorted.md` worth a new topic. Do NOT auto-run `/kb-lint` — suggest it if you noticed issues.
+When done, report what was created vs updated vs skipped, and flag anything still in `_unsorted.md` worth a new topic. Do NOT auto-run `/engram:kb-lint` — suggest it if you noticed issues.

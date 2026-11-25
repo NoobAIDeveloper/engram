@@ -1,6 +1,12 @@
 # engram KB gitignore
 
+# SECRETS — source config can hold API tokens (Notion, Granola, GitHub).
+# Never commit this file.
+.engram/sources.json
+
 # Sync state and Claude-generated cluster map (regenerable)
+.engram/*-sync-meta.json
+.engram/autosync.json
 .engram/sync-meta.json
 .engram/cluster-map.json.bak
 .engram/ingest-state.json
@@ -25,8 +31,11 @@ Thumbs.db
 __pycache__/
 *.pyc
 
-# By default, do NOT ignore the bookmarks JSONL or the cluster map itself —
-# users may want to back them up via git. If you'd rather keep your bookmarks
-# private, uncomment:
+# By default, do NOT ignore the raw item stores or the cluster map itself —
+# users may want to back them up via git. NOTE: raw/items.jsonl can contain
+# your AI chat history and meeting notes; if this repo will ever be pushed
+# somewhere shared, uncomment:
+# raw/items.jsonl
 # raw/bookmarks.jsonl
+# raw/bookmarks/
 # .engram/cluster-map.json

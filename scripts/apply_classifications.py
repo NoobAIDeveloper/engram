@@ -9,9 +9,10 @@ and `.engram/cluster-map.json`, then writes a classification mapping:
 
 Items not classifiable get omitted (or listed with empty []) and stay unsorted.
 
-This script overlays those assignments on the rule-based buckets produced by
-preprocess.py and rewrites every batch file (plus `_unsorted.md` /
-`_unsorted.jsonl` / `_manifest.md`) atomically.
+This script merges those assignments into the persistent overlay at
+`.engram/classifications.json` and regenerates every batch file. Because
+preprocess.py reads the same overlay, classified items stay in their topics
+on every later preprocess run instead of falling back into `_unsorted`.
 
 Usage:
     python3 scripts/apply_classifications.py --kb <kb-path> \
@@ -23,37 +24,23 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from preprocess import (  # noqa: E402
-    clean_batch_dir,
+    OVERLAY_REL,
+    build_batches,
     load_cluster_map,
     load_items_or_bookmarks,
-    write_batch,
-    write_manifest,
+    load_overlay,
+    route,
 )
-
-
-def _route_rules(topics, items: list[dict[str, Any]]):
-    buckets: dict[str, list[dict[str, Any]]] = {t.name: [] for t in topics}
-    unsorted: list[dict[str, Any]] = []
-    for it in items:
-        hit = False
-        for t in topics:
-            if t.matches(it):
-                buckets[t.name].append(it)
-                hit = True
-        if not hit:
-            unsorted.append(it)
-    return buckets, unsorted
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(
-        description="Overlay Haiku classifications onto rule-based routing."
+        description="Overlay LLM classifications onto rule-based routing."
     )
     ap.add_argument("--kb", required=True, type=Path)
     ap.add_argument(
@@ -65,15 +52,12 @@ def main() -> int:
     args = ap.parse_args()
 
     kb: Path = args.kb.resolve()
-    map_path = kb / ".engram" / "cluster-map.json"
-    batch_dir = kb / "raw" / "bookmarks"
-
-    topics = load_cluster_map(map_path)
-    topic_names = {t.name for t in topics}
-    items = load_items_or_bookmarks(kb)
+    cls_path = args.classifications
+    if not cls_path.is_absolute() and not cls_path.exists():
+        cls_path = kb / cls_path  # allow paths relative to the KB
 
     try:
-        raw = json.loads(args.classifications.read_text())
+        raw = json.loads(cls_path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         sys.exit(f"error: {args.classifications} not found.")
     except json.JSONDecodeError as e:
@@ -86,72 +70,51 @@ def main() -> int:
             "{\"classifications\": {item_id: [topic, ...]}}"
         )
 
-    buckets, unsorted = _route_rules(topics, items)
-    rule_ids = {it.get("id") for bucket in buckets.values() for it in bucket}
-    unsorted_by_id = {it.get("id"): it for it in unsorted if it.get("id")}
+    topics = load_cluster_map(kb / ".engram" / "cluster-map.json")
+    topic_names = {t.name for t in topics}
+    items = load_items_or_bookmarks(kb)
+    overlay = load_overlay(kb)
 
-    # Track what actually moved, ignore classifications that refer to items the
-    # rules already matched (they're not unsorted anymore) or to unknown topics.
+    # What is unsorted right now (rules + whatever was already saved)?
+    _, unsorted_before, _ = route(topics, items, overlay)
+    unsorted_ids = {str(it.get("id")) for it in unsorted_before if it.get("id")}
+    known_ids = {str(it.get("id")) for it in items if it.get("id")}
+
     moved = 0
     skipped_unknown_item = 0
     skipped_unknown_topic = 0
-    still_unsorted: list[dict[str, Any]] = []
-    dispatched_ids: set[str] = set()
-
-    for item_id, assigned_topics in classifications.items():
-        if item_id in rule_ids:
-            continue
-        if item_id not in unsorted_by_id:
+    for item_id, assigned in classifications.items():
+        item_id = str(item_id)
+        if item_id not in known_ids:
             skipped_unknown_item += 1
             continue
-        if not isinstance(assigned_topics, list) or not assigned_topics:
+        if item_id not in unsorted_ids:
+            continue  # already placed by a rule or an earlier classification
+        if not isinstance(assigned, list):
             continue
-        item = unsorted_by_id[item_id]
-        for topic_name in assigned_topics:
-            if topic_name not in topic_names:
-                skipped_unknown_topic += 1
-                continue
-            buckets[topic_name].append(item)
-        if any(t in topic_names for t in assigned_topics):
-            dispatched_ids.add(item_id)
+        valid = [n for n in dict.fromkeys(assigned) if n in topic_names]
+        skipped_unknown_topic += len(set(map(str, assigned))) - len(valid)
+        if valid:
+            overlay[item_id] = valid
             moved += 1
 
-    for it in unsorted:
-        if it.get("id") in dispatched_ids:
-            continue
-        still_unsorted.append(it)
-
-    clean_batch_dir(batch_dir)
-    for t in topics:
-        write_batch(batch_dir / f"{t.name}.md", t, buckets[t.name])
-    write_batch(batch_dir / "_unsorted.md", None, still_unsorted)
-    unsorted_jsonl = batch_dir / "_unsorted.jsonl"
-    if still_unsorted:
-        unsorted_jsonl.write_text(
-            "".join(json.dumps(it) + "\n" for it in still_unsorted)
-        )
-    elif unsorted_jsonl.exists():
-        unsorted_jsonl.unlink()
-
-    generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
-    counts = {name: len(bms) for name, bms in buckets.items()}
-    source_counts: dict[str, int] = {}
-    for it in items:
-        s = (it.get("source") or "x").lower()
-        source_counts[s] = source_counts.get(s, 0) + 1
-    write_manifest(
-        batch_dir / "_manifest.md",
-        topics,
-        counts,
-        unsorted_count=len(still_unsorted),
-        total=len(items),
-        generated_at=generated_at,
-        source_counts=source_counts,
+    # Drop entries for items that no longer exist so the file can't grow
+    # without bound.
+    overlay = {k: v for k, v in overlay.items() if k in known_ids}
+    overlay_path = kb / OVERLAY_REL
+    overlay_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = overlay_path.with_suffix(".json.tmp")
+    tmp.write_text(
+        json.dumps({"classifications": overlay}, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
     )
+    tmp.replace(overlay_path)
+
+    result = build_batches(kb)
 
     print(
         f"applied: {moved} item(s) moved from _unsorted into topic batches · "
-        f"{len(still_unsorted)} still unsorted"
+        f"{len(result['unsorted'])} still unsorted"
     )
     if skipped_unknown_item:
         print(

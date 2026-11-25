@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -49,19 +50,76 @@ def _extract_assistant_text(msg: dict[str, Any]) -> str:
     return "\n\n".join(parts)
 
 
-def _is_real_user_prompt(rec: dict[str, Any]) -> bool:
-    """True iff this is a human-typed prompt, not a tool result."""
+# Harness-generated "user" records: task notifications, slash-command
+# plumbing, local shell echo, injected reminders, interrupt markers. None of
+# these were typed by the human, so they never start a Q+A pair.
+_HARNESS_PREFIXES = (
+    "<task-notification>",
+    "<local-command-caveat>",
+    "<local-command-stdout>",
+    "<local-command-stderr>",
+    "<command-name>",
+    "<command-message>",
+    "<command-args>",
+    "<command-contents>",
+    "<system-reminder>",
+    "<bash-input>",
+    "<bash-stdout>",
+    "<bash-stderr>",
+    "<scheduled-task",
+    "<user-prompt-submit-hook>",
+    "<teammate-message",
+    "Caveat:",
+    "[Request interrupted",
+)
+
+
+def _is_harness_text(text: str) -> bool:
+    return text.lstrip().startswith(_HARNESS_PREFIXES)
+
+
+def _user_prompt_text(rec: dict[str, Any]) -> str:
+    """Return the human-typed prompt text of a record, or "" if the record
+    is not a real user prompt (tool result, harness wrapper, sidechain,
+    meta/compaction record, slash-command invocation)."""
     if rec.get("type") != "user":
-        return False
-    if rec.get("isSidechain"):
-        return False
-    msg = rec.get("message") or {}
+        return ""
+    if rec.get("isSidechain") or rec.get("isMeta") or rec.get("isCompactSummary"):
+        return ""
+    msg = rec.get("message")
+    if not isinstance(msg, dict):
+        return ""
     content = msg.get("content")
-    # Tool results arrive as user messages with list content containing
-    # tool_result blocks. Real prompts are plain strings.
     if isinstance(content, str):
-        return bool(content.strip())
-    return False
+        text = content.strip()
+        return "" if _is_harness_text(text) else text
+    if not isinstance(content, list):
+        return ""
+    # List content: tool results arrive as tool_result blocks; real prompts
+    # are text blocks, optionally alongside image blocks.
+    parts: list[str] = []
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        btype = block.get("type")
+        if btype == "tool_result":
+            return ""
+        if btype == "text":
+            t = block.get("text")
+            if isinstance(t, str) and t.strip() and not _is_harness_text(t):
+                parts.append(t.strip())
+    return "\n\n".join(parts)
+
+
+def _is_real_user_prompt(rec: dict[str, Any]) -> bool:
+    """True iff this is a human-typed prompt, not a tool result or wrapper."""
+    return bool(_user_prompt_text(rec))
+
+
+def _encode_project_path(path: str) -> str:
+    # Claude Code names project dirs by replacing every non-alphanumeric
+    # character of the cwd with "-" (so "/", ".", "_" and spaces all map).
+    return re.sub(r"[^A-Za-z0-9]", "-", path)
 
 
 def _iter_session_files(skip_paths: Iterable[Path] = ()) -> Iterable[Path]:
@@ -71,17 +129,28 @@ def _iter_session_files(skip_paths: Iterable[Path] = ()) -> Iterable[Path]:
     for proj_dir in sorted(PROJECTS_DIR.iterdir()):
         if not proj_dir.is_dir():
             continue
-        # The encoded folder name ends with the project path (with / → -).
-        # Cheap skip for KB's own sessions.
-        if any(str(proj_dir).endswith(s.replace("/", "-")) for s in skip_set):
+        # The folder name is the encoded project path. Cheap skip for the
+        # KB's own sessions.
+        # Compared case-insensitively: on case-insensitive filesystems the
+        # recorded cwd and the resolved KB path can differ in case.
+        name = proj_dir.name.casefold()
+        if any(name == _encode_project_path(s).casefold() for s in skip_set):
             continue
         for session in sorted(proj_dir.glob("*.jsonl")):
             yield session
 
 
-def _project_label(session_path: Path) -> str:
-    # ~/.claude/projects/-Users-bharat-Projects-engram/<uuid>.jsonl
-    # → "engram" (last path component of the original cwd).
+def _project_label(session_path: Path, records: Iterable[dict[str, Any]] = ()) -> str:
+    # Prefer the cwd recorded in the session itself: the folder encoding is
+    # lossy ("twitter-wiki" and "twitter/wiki" both encode to "twitter-wiki").
+    for rec in records:
+        cwd = rec.get("cwd") if isinstance(rec, dict) else None
+        if isinstance(cwd, str) and cwd.strip() and not rec.get("isSidechain"):
+            name = os.path.basename(cwd.rstrip("/\\"))
+            if name:
+                return name
+    # Fallback: ~/.claude/projects/-Users-bharat-Projects-engram/<uuid>.jsonl
+    # → "engram" (last dash-separated component of the encoded cwd).
     folder = session_path.parent.name
     if folder.startswith("-"):
         folder = folder[1:]
@@ -91,7 +160,6 @@ def _project_label(session_path: Path) -> str:
 
 def _pair_turns(session_path: Path) -> list[Item]:
     session_id = session_path.stem
-    project = _project_label(session_path)
     # Folder name is already unique across the projects dir, so use it to
     # disambiguate session uuids that appear in multiple project subdirs.
     folder_tag = session_path.parent.name
@@ -103,19 +171,23 @@ def _pair_turns(session_path: Path) -> list[Item]:
         if not line:
             continue
         try:
-            records.append(json.loads(line))
+            rec = json.loads(line)
         except json.JSONDecodeError:
             continue
+        if isinstance(rec, dict):
+            records.append(rec)
+
+    project = _project_label(session_path, records)
 
     items: list[Item] = []
     i = 0
     turn_index = 0
     while i < len(records):
         rec = records[i]
-        if not _is_real_user_prompt(rec):
+        user_text = _user_prompt_text(rec)
+        if not user_text:
             i += 1
             continue
-        user_text = (rec["message"]["content"] or "").strip()
         if len(user_text) > MAX_USER_LEN:
             user_text = user_text[:MAX_USER_LEN] + "\n[...truncated]"
         user_ts = rec.get("timestamp") or ""

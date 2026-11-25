@@ -5,11 +5,13 @@ argument-hint: <source-name> [source-specific args]
 
 The user wants to enable a new data source for the current KB. Supported source names: `github-stars`, `claude-code`, `browser-bookmarks`, `kindle`, `chatgpt`, `claude-ai`, `notion`, `granola`.
 
-The current working directory should be a KB (contain `CLAUDE.md`). If not, tell them to `cd` into their KB first or run `/kb-init`.
+The current working directory should be a KB (contain `CLAUDE.md`). If not, tell them to `cd` into their KB first or run `/engram:kb-init`.
 
 ## How to configure each source
 
-Read `$(pwd)/.engram/sources.json` (create if missing, JSON object root). Add the relevant block, then commit with an atomic write.
+Read `$(pwd)/.engram/sources.json` (create if missing, JSON object root). Add the relevant block and write the file back.
+
+`sources.json` can hold API tokens. Whenever you write a token into it, make sure the KB's `.gitignore` contains the line `.engram/sources.json` (KBs created by older versions do not) and add it if missing. Never echo a token back to the user or into `wiki/log.md`.
 
 ### `github-stars`
 Ask the user for their GitHub handle if `$ARGUMENTS` didn't include one. Merge into `sources.json`:
@@ -20,33 +22,33 @@ Ask the user for their GitHub handle if `$ARGUMENTS` didn't include one. Merge i
 
 Optionally mention: setting `GITHUB_TOKEN` env var raises the rate limit from 60/hr to 5000/hr. They can do this in their shell profile — don't ask them to paste a token here.
 
-After updating `sources.json`, tell them to run `/kb-sync --source github-stars`.
+After updating `sources.json`, tell them to run `/engram:kb-sync --source github-stars`.
 
 ### `claude-code`
-No config required — the adapter discovers sessions automatically. Just tell them to run `/kb-sync --source claude-code`. Warn that by default sessions from this KB's own directory are skipped; they can override with `--include-self`.
+No config required — the adapter discovers sessions automatically. Just tell them to run `/engram:kb-sync --source claude-code`. Warn that by default sessions from this KB's own directory are skipped; they can override with `--include-self`.
 
 ### `browser-bookmarks`
-No config required. Tell them to run `/kb-sync --source browser-bookmarks`.
+No config required. Tell them to run `/engram:kb-sync --source browser-bookmarks`.
 
 ### `kindle`
 One-shot import, not an ongoing sync. Tell the user to:
 1. Plug their Kindle in via USB.
 2. Find the `My Clippings.txt` file on the Kindle drive.
-3. Run `/kb-sync --source kindle --clippings /path/to/My\ Clippings.txt`.
+3. Run `/engram:kb-sync --source kindle --clippings /path/to/My\ Clippings.txt`.
 
 ### `chatgpt`
 No config required — cookies are extracted from the user's browser. Tell them to:
 1. Make sure they're logged in at https://chatgpt.com in their default browser.
-2. Run `/kb-sync --source chatgpt`.
+2. Run `/engram:kb-sync --source chatgpt`.
 
-Privacy note: pulls Q+A pairs from the user's ChatGPT history into `raw/items.jsonl`. If the live sync ever breaks (Cloudflare, cookie expiry), the fallback is `/kb-request-chatgpt-export` → `/kb-import-chatgpt <zip>`.
+Privacy note: pulls Q+A pairs from the user's ChatGPT history into `raw/items.jsonl`. If the live sync ever breaks (Cloudflare, cookie expiry), the fallback is `/engram:kb-request-chatgpt-export` → `/engram:kb-import-chatgpt <zip>`.
 
 ### `claude-ai`
 No config required — same cookie-based approach as ChatGPT. Tell them to:
 1. Make sure they're logged in at https://claude.ai.
-2. Run `/kb-sync --source claude-ai`.
+2. Run `/engram:kb-sync --source claude-ai`.
 
-Fallback if live sync breaks: export from Settings → Account → Export Account Data, then run `/kb-import-claude <zip>`.
+Fallback if live sync breaks: export from Settings → Account → Export Account Data, then run `/engram:kb-import-claude <zip>`.
 
 ### `notion`
 Notion uses an internal integration token, not cookies. Walk the user through:
@@ -62,11 +64,13 @@ Notion uses an internal integration token, not cookies. Walk the user through:
 
 Long pages are split along H1/H2 headings into multiple chunks; pages without headings fall back to size-based windowing. Each chunk becomes its own item so a 10k-word doc still surfaces all of its content to synthesis.
 
-Privacy note: during `/kb-ingest`, page content is sent to Anthropic's API (same as every other source). Anything the user doesn't want synthesized should not be shared with the integration in Notion's UI.
+Privacy note: during `/engram:kb-ingest`, page content is sent to Anthropic's API (same as every other source). Anything the user doesn't want synthesized should not be shared with the integration in Notion's UI.
 
-After updating `sources.json`, tell them to run `/kb-sync --source notion`.
+After updating `sources.json`, tell them to run `/engram:kb-sync --source notion`.
 
 ### `granola`
+**Check first — recent Granola versions are not supported.** Since mid-2026 the desktop app encrypts its local cache. Before asking the user anything, run `ls ~/Library/Application\ Support/Granola/`: if you see `cache-v*.json.enc`, tell the user plainly that engram cannot read this Granola version's meetings yet (the sync will fail with the same explanation), and stop — do not write a `granola` block. The instructions below apply only to older installs with a readable plaintext cache.
+
 macOS-only. Granola stores every meeting in a local JSON cache at `~/Library/Application Support/Granola/cache-v6.json` (older builds used v3/v5; the adapter resolves whichever is newest). For meetings you've AI-enhanced inside Granola, the adapter can also pull the enhanced summary from Granola's internal API — and the auth token for that is auto-detected from `supabase.json` next to the cache, so there's nothing to paste.
 
 Walk the user through TWO questions. Present each set of options as a numbered list and let them reply with a letter, a number, or the mode name. If their reply is ambiguous or empty, default to the recommended option and tell them you've done so.
@@ -107,10 +111,10 @@ Don't volunteer `cache_path` unprompted — most users don't need it.
 
 Chunking behavior given the chosen mode: `notes` and `transcript` produce a single stream of chunks. `both` emits notes/summary chunks first (heading-split) followed by transcript chunks (size-windowed) under a single `granola:<doc_id>:<chunk_index>` id family. `auto` picks notes/summary if it's substantive, else transcript, else both as a last resort. When `use_api` is on and a meeting has an enhanced summary on the server, that summary supersedes the local-cache notes for that meeting; otherwise local notes are used.
 
-Privacy note: meeting content is sent to Anthropic's API during `/kb-ingest` for synthesis, same as every other source. With `use_api` on, the adapter additionally talks to `api.granola.ai` (the same server the Granola desktop app already talks to). If the user is squeamish about transcript text leaving their machine, steer them to `notes` mode; if they don't want any extra network calls beyond Anthropic, set `use_api: false`.
+Privacy note: meeting content is sent to Anthropic's API during `/engram:kb-ingest` for synthesis, same as every other source. With `use_api` on, the adapter additionally talks to `api.granola.ai` (the same server the Granola desktop app already talks to). If the user is squeamish about transcript text leaving their machine, steer them to `notes` mode; if they don't want any extra network calls beyond Anthropic, set `use_api: false`.
 
-After updating `sources.json`, tell them to run `/kb-sync --source granola`.
+After updating `sources.json`, tell them to run `/engram:kb-sync --source granola`.
 
 ## After configuring
 
-Don't automatically run the sync — let the user trigger it. But say exactly which `/kb-sync` invocation they should use next.
+Don't automatically run the sync — let the user trigger it. But say exactly which `/engram:kb-sync` invocation they should use next.

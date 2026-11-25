@@ -1,6 +1,6 @@
 # Clustering guide
 
-Loaded on first ingest and on `/kb-recluster`. The goal is to produce
+Loaded on first ingest and on `/engram:kb-recluster`. The goal is to produce
 `.engram/cluster-map.json` — a deterministic routing map that
 `preprocess.py` applies to the bookmarks.
 
@@ -122,7 +122,7 @@ Omit `sources` to match items from every source.
 
 ## When to recluster
 
-The user invokes `/kb-recluster`. Look for:
+The user invokes `/engram:kb-recluster`. Look for:
 
 - A topic that grew much larger than peers → **split candidate**.
 - Two topics with heavy overlap in their pages → **merge candidate**.

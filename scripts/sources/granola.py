@@ -330,7 +330,9 @@ def _api_post(
             raise GranolaAPIError(
                 f"Granola POST {path} → {exc.code}: {err_body}"
             ) from exc
-        except urllib.error.URLError as exc:
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            # URLError covers connect failures; a timeout while *reading*
+            # the body surfaces as a bare TimeoutError/OSError instead.
             if attempt < max_retries:
                 time.sleep(2 ** attempt)
                 attempt += 1
@@ -428,6 +430,45 @@ class GranolaCacheError(RuntimeError):
     pass
 
 
+class GranolaEncryptedCacheError(GranolaCacheError):
+    """The installed Granola encrypts its local cache; we can't read it.
+
+    Unlike a plain GranolaCacheError (treated as "nothing to sync"), this
+    propagates out of sync() so the run is reported as a failure rather
+    than a successful sync of 0 meetings.
+    """
+
+
+def _encrypted_sibling(cache_path: Path) -> Path | None:
+    """Return the encrypted cache next to `cache_path`, if any.
+
+    Newer Granola desktop builds write `cache-v6.json.enc` (plus
+    `supabase.json.enc` / `granola.db`) and leave the plaintext
+    `cache-v6.json` behind stale or empty.
+    """
+    direct = cache_path.with_name(cache_path.name + ".enc")
+    if direct.exists():
+        return direct
+    try:
+        others = sorted(cache_path.parent.glob("cache-v*.json.enc"))
+    except OSError:
+        return None
+    return others[0] if others else None
+
+
+def _encrypted_cache_message(cache_path: Path, enc_path: Path) -> str:
+    return (
+        f"this Granola version encrypts its local cache ({enc_path.name}), "
+        f"so engram can't read your meetings; the plaintext cache at "
+        f"{cache_path} is missing or has no documents. The granola source "
+        f"is currently unsupported for this Granola version. Setting "
+        f"granola.api_token in .engram/sources.json does not help: engram "
+        f"only uses the API to enrich meetings it has already found in the "
+        f"local cache. If you have an older unencrypted cache file, point "
+        f"granola.cache_path at it."
+    )
+
+
 def load_cache(cache_path: Path) -> dict[str, Any]:
     """Parse Granola's cache-v3.json, handling both v5 and v6 wrappers.
 
@@ -487,6 +528,9 @@ def _iter_meetings(state: dict[str, Any]) -> Iterable[dict[str, Any]]:
 
     for doc_id, doc in documents.items():
         if not isinstance(doc, dict):
+            continue
+        if doc.get("deleted_at"):
+            # Soft-deleted in Granola; sync() drops any chunks we hold.
             continue
         meeting = dict(doc)
 
@@ -549,6 +593,16 @@ def _meeting_timestamp(m: dict[str, Any]) -> str:
         # Google-calendar style {"dateTime": "..."} — rare but seen.
         ts = ts.get("dateTime") or ""
     return str(ts) if ts else ""
+
+
+def _meeting_updated_at(m: dict[str, Any]) -> str:
+    """Timestamp used for change detection (NOT display).
+
+    Must be the last-edit time: _meeting_timestamp prefers end/created
+    time, which never moves when notes are edited after the meeting.
+    """
+    ts = _pick(m, ["updated_at", "updatedAt"], "")
+    return str(ts) if isinstance(ts, str) and ts else _meeting_timestamp(m)
 
 
 def _meeting_participants(m: dict[str, Any]) -> list[str]:
@@ -849,9 +903,19 @@ def sync(
         drop_items_by_id_prefix(kb_dir, f"{SOURCE_ID}:")
         full = True
 
+    enc_path = _encrypted_sibling(cache_path)
     try:
         state = load_cache(cache_path)
+        if enc_path is not None and not (state.get("documents") or {}):
+            raise GranolaEncryptedCacheError(
+                _encrypted_cache_message(cache_path, enc_path)
+            )
     except GranolaCacheError as exc:
+        if enc_path is not None and not isinstance(exc, GranolaEncryptedCacheError):
+            # Plaintext cache missing/unparseable next to an encrypted one.
+            exc = GranolaEncryptedCacheError(
+                _encrypted_cache_message(cache_path, enc_path)
+            )
         print(f"[granola] {exc}", file=sys.stderr)
         # Even on cache miss, persist the active config so the next
         # sync doesn't see a stale prior config and re-trigger the purge.
@@ -860,7 +924,20 @@ def sync(
             existing["content_mode"] = content_mode
             existing["use_api"] = use_api
             _write_meta(kb_dir, existing)
+        if isinstance(exc, GranolaEncryptedCacheError):
+            # Fail loudly: returning [] here would be reported as a
+            # successful sync of 0 meetings.
+            raise exc
         return []
+
+    if enc_path is not None:
+        print(
+            f"[granola] warning: {enc_path.name} exists next to the plaintext "
+            f"cache — this Granola version encrypts its cache, so "
+            f"{cache_path.name} is probably stale and recent meetings may be "
+            f"missing.",
+            file=sys.stderr,
+        )
 
     last_synced_at = None if full else meta.get("last_synced_at")
 
@@ -900,16 +977,26 @@ def sync(
     # doc has been edited since.
     panel_cache: dict[str, str] = dict(meta.get("meetings_without_panels") or {})
 
+    # Documents soft-deleted in Granola: drop any chunks we emitted earlier.
+    deleted = 0
+    for doc_id, doc in (state.get("documents") or {}).items():
+        if isinstance(doc, dict) and doc.get("deleted_at"):
+            did = str(_pick(doc, ["id", "meeting_id", "session_id", "uuid"], doc_id))
+            drop_items_by_id_prefix(kb_dir, f"{SOURCE_ID}:{did}:")
+            deleted += 1
+    if deleted:
+        print(f"[granola] skipped {deleted} deleted document(s)", file=sys.stderr)
+
     all_items: list[Item] = []
     seen = 0
     changed = 0
     for meeting in _iter_meetings(state):
         seen += 1
         meeting_id = str(meeting["_resolved_id"])
-        # Use the same timestamp ladder as _meeting_timestamp so the
-        # incremental filter agrees with what we emit. If a known meeting
-        # has no timestamp, assume unchanged and skip.
-        updated = _meeting_timestamp(meeting)
+        # Change detection uses the last-edit time (updated_at), not the
+        # display timestamp, so notes edited after the meeting re-sync.
+        # If a known meeting has no timestamp, assume unchanged and skip.
+        updated = _meeting_updated_at(meeting)
         if last_synced_at and meeting_id in known_ids:
             if not updated or str(updated) <= last_synced_at:
                 continue

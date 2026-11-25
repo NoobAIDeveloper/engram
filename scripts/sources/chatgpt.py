@@ -36,7 +36,9 @@ from sources.base import Item  # noqa: E402
 
 
 SOURCE_ID = "chatgpt"
-HOST_PATTERNS = ("%chatgpt.com", "%chat.openai.com")
+# Exact domains (cookies.py matches "<domain>" and ".<domain>" only);
+# first-listed wins when a cookie name exists on both.
+HOST_PATTERNS = ("chatgpt.com", "chat.openai.com")
 SESSION_COOKIE = "__Secure-next-auth.session-token"
 COOKIE_NAMES = {SESSION_COOKIE}
 # OpenAI sets these during login / sensitive-op reauth. We pass whatever
@@ -194,6 +196,13 @@ def _list_conversations(
             break
         offset += PAGE_SIZE
         time.sleep(0.3)
+    else:
+        print(
+            f"[chatgpt] warning: conversation list truncated at "
+            f"MAX_CONVERSATIONS={hard_limit}; older conversations beyond that "
+            f"were not listed and will not be synced.",
+            file=sys.stderr,
+        )
     return conversations
 
 
@@ -211,7 +220,7 @@ def _pair_turns(conv: dict[str, Any]) -> list[Item]:
     # Flatten into chronological order by create_time.
     messages: list[dict[str, Any]] = []
     for node in mapping.values():
-        m = node.get("message")
+        m = node.get("message") if isinstance(node, dict) else None
         if not isinstance(m, dict):
             continue
         messages.append(m)
@@ -220,14 +229,14 @@ def _pair_turns(conv: dict[str, Any]) -> list[Item]:
     def _text_of(msg: dict[str, Any]) -> str:
         content = msg.get("content") or {}
         ctype = content.get("content_type")
-        if ctype == "text":
-            return "\n".join(content.get("parts") or [])
-        if ctype == "multimodal_text":
+        if ctype in ("text", "multimodal_text"):
+            # parts can hold non-strings (image pointers, dicts, None) under
+            # either content type — keep only the textual ones.
             parts = []
             for p in content.get("parts") or []:
                 if isinstance(p, str):
                     parts.append(p)
-                elif isinstance(p, dict) and p.get("text"):
+                elif isinstance(p, dict) and isinstance(p.get("text"), str):
                     parts.append(p["text"])
             return "\n".join(parts)
         # code, tether_browsing_code, etc. — ignore
@@ -308,6 +317,21 @@ def _pair_turns(conv: dict[str, Any]) -> list[Item]:
     return items
 
 
+def _safe_pair_turns(conv: dict[str, Any]) -> list[Item]:
+    """_pair_turns, but one malformed conversation is skipped with a warning
+    instead of aborting the whole run."""
+    try:
+        return _pair_turns(conv)
+    except Exception as exc:  # noqa: BLE001
+        conv_id = conv.get("conversation_id") or conv.get("id") or "?"
+        print(
+            f"[chatgpt] warning: could not parse conversation {conv_id}; "
+            f"skipping it ({type(exc).__name__}: {exc})",
+            file=sys.stderr,
+        )
+        return []
+
+
 def sync(
     kb_dir: Path,
     *,
@@ -351,7 +375,10 @@ def sync(
     conv_list = sorted(conv_list, key=lambda c: c.get("update_time") or "")
 
     all_items: list[Item] = []
-    newest_update_time = stop_at or ""
+    done_update_times: list[str] = []
+    # update_time of the oldest conversation whose fetch failed; the cursor
+    # must stay below it so the next sync retries it.
+    oldest_failed: str | None = None
     halt_msg: str | None = None
     for i, summary in enumerate(conv_list, 1):
         conv_id = summary.get("id")
@@ -383,8 +410,19 @@ def sync(
                 )
                 time.sleep(wait)
             except Exception as exc:  # noqa: BLE001
-                print(f"[chatgpt] skip conversation {conv_id}: {exc}", file=sys.stderr)
                 skip = True
+                failed_ut = summary.get("update_time") or ""
+                # A 404 is a conversation deleted since listing: nothing to retry.
+                if str(exc).startswith("HTTP 404 ") or not failed_ut:
+                    print(f"[chatgpt] skip conversation {conv_id}: {exc}", file=sys.stderr)
+                else:
+                    print(
+                        f"[chatgpt] skip conversation {conv_id} (will retry "
+                        f"next sync): {exc}",
+                        file=sys.stderr,
+                    )
+                    if oldest_failed is None or failed_ut < oldest_failed:
+                        oldest_failed = failed_ut
                 break
         if halt_msg:
             break
@@ -397,15 +435,22 @@ def sync(
                 f"pick up the remaining {len(conv_list) - i + 1}."
             )
             break
-        all_items.extend(_pair_turns(conv))
-        ut = summary.get("update_time") or ""
-        if ut > newest_update_time:
-            newest_update_time = ut
+        all_items.extend(_safe_pair_turns(conv))
+        done_update_times.append(summary.get("update_time") or "")
         if i % 10 == 0:
             print(f"[chatgpt] fetched {i}/{len(conv_list)}", file=sys.stderr)
         # 4-7s jitter: OpenAI's per-user limit bites around ~20 req/min, so
         # target ~11 req/min to stay comfortably below it.
         time.sleep(random.uniform(4.0, 7.0))
+
+    # Advance the cursor only over conversations we actually fetched: stay
+    # strictly below the oldest failed one (listing skips update_time <= cursor).
+    newest_update_time = stop_at or ""
+    for ut in done_update_times:
+        if oldest_failed is not None and ut >= oldest_failed:
+            continue
+        if ut > newest_update_time:
+            newest_update_time = ut
 
     if newest_update_time:
         meta_path.write_text(
@@ -524,7 +569,7 @@ def ingest_export(zip_path: Path) -> list[dict[str, Any]]:
     for conv in conversations:
         if not isinstance(conv, dict):
             continue
-        items.extend(_pair_turns(conv))
+        items.extend(_safe_pair_turns(conv))
     return [it.to_json() for it in items]
 
 

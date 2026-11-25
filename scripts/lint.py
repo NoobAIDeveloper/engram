@@ -8,13 +8,13 @@ filenames, missing TLDR sections, missing Counter-arguments on concept
 pages, broken wikilinks, and orphan pages.
 
 Frontmatter is YAML by convention but we parse a restricted subset
-inline (flat key:value pairs, inline-list values, quoted or unquoted
-scalars). This keeps the script stdlib-only.
+(flat key:value pairs, inline `[a, b]` lists, block `- item` lists, quoted
+or unquoted scalars). This keeps the script stdlib-only.
 
 Usage:
     python3 scripts/lint.py --kb <kb-path> [--json]
 
-Exit code: 0 if clean, 1 if any issues were found.
+Exit code: 0 if there are no errors (warnings alone still exit 0), 1 otherwise.
 """
 
 from __future__ import annotations
@@ -29,12 +29,23 @@ from pathlib import Path
 from typing import Any
 
 
-VALID_TYPES = {"concept", "person", "event", "resource", "query", "stale", "index", "log"}
+# Union of references/frontmatter-schema.md and the per-KB CLAUDE.md
+# template (which also documents `summary` and `reference`).
+VALID_TYPES = {
+    "concept", "person", "event", "resource", "summary", "reference",
+    "query", "stale", "index", "log",
+}
 META_TYPES = {"index", "log"}  # exempt from content checks (TLDR, sources, tags, counter-args)
 KEBAB_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
-FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n(.*)$", re.DOTALL)
-WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)(?:[|#][^\]]*)?\]\]")
-TLDR_RE = re.compile(r"^#+\s*TL;?DR\b", re.IGNORECASE | re.MULTILINE)
+FRONTMATTER_RE = re.compile(r"^---[ \t]*\n(.*?)\n---[ \t]*(?:\n(.*))?$", re.DOTALL)
+# Target stops at `|` (alias), `#` (heading) or `\` (the `\|` escape needed
+# for an aliased link inside a markdown table).
+WIKILINK_RE = re.compile(r"\[\[([^\]|#\\]+)(?:[|#\\][^\]]*)?\]\]")
+# Either a heading ("## TLDR") or the bold lead-in the KB template and the
+# init stubs use ("**TLDR:** …").
+TLDR_RE = re.compile(
+    r"^(?:#+\s*TL;?DR\b|\*\*TL;?DR:?\*\*)", re.IGNORECASE | re.MULTILINE
+)
 COUNTER_RE = re.compile(
     r"^#+\s*counter[\s-]?arguments?\b", re.IGNORECASE | re.MULTILINE
 )
@@ -89,22 +100,36 @@ def _parse_scalar(s: str) -> Any:
 
 
 def parse_frontmatter(text: str) -> tuple[dict[str, Any] | None, str, str | None]:
+    text = text.lstrip("\ufeff").replace("\r\n", "\n")
     m = FRONTMATTER_RE.match(text)
     if not m:
         return None, text, "no frontmatter block"
+    body = m.group(2) or ""
     meta: dict[str, Any] = {}
+    list_key: str | None = None  # key whose block list we're collecting
     for i, line in enumerate(m.group(1).splitlines(), 1):
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
             continue
+        # Block-list item under the previous `key:` line.
+        if stripped.startswith("- ") or stripped == "-":
+            if list_key is None:
+                return None, body, f"line {i}: list item without a key"
+            if not isinstance(meta[list_key], list):
+                meta[list_key] = []
+            item = _strip_quotes(stripped[1:])
+            if item:
+                meta[list_key].append(item)
+            continue
         if ":" not in stripped:
-            return None, m.group(2), f"line {i}: expected `key: value`, got {stripped!r}"
+            return None, body, f"line {i}: expected `key: value`, got {stripped!r}"
         key, _, value = stripped.partition(":")
         key = key.strip()
         if not key:
-            return None, m.group(2), f"line {i}: empty key"
+            return None, body, f"line {i}: empty key"
         meta[key] = _parse_scalar(value)
-    return meta, m.group(2), None
+        list_key = key if not value.strip() else None
+    return meta, body, None
 
 
 def parse_iso_date(v: Any) -> date | None:
@@ -112,10 +137,22 @@ def parse_iso_date(v: Any) -> date | None:
         return v
     if not isinstance(v, str):
         return None
+    v = v.strip()
+    # fromisoformat accepts "20260301" on 3.11+ but not 3.10; pin the shape
+    # so results don't depend on the interpreter.
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", v):
+        return None
     try:
-        return date.fromisoformat(v.strip())
+        return date.fromisoformat(v)
     except ValueError:
         return None
+
+
+def _link_stem(target: str) -> str:
+    """`[[queries/my-question]]` and `[[my-question.md]]` both refer to the
+    page whose filename stem is `my-question` (Obsidian resolves by name)."""
+    target = target.strip().rsplit("/", 1)[-1]
+    return target[:-3] if target.endswith(".md") else target
 
 
 def lint_page(
@@ -133,14 +170,14 @@ def lint_page(
         issues.append(Issue("bad-filename", rel,
             f"filename {stem!r} is not kebab-case"))
 
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8", errors="replace")
     meta, body, fm_err = parse_frontmatter(text)
 
     if fm_err or meta is None:
         issues.append(Issue("missing-frontmatter", rel, fm_err or "frontmatter missing"))
         # Still try to find wikilinks so we don't hide orphan data
         for m in WIKILINK_RE.finditer(text):
-            refs.add(m.group(1).strip())
+            refs.add(_link_stem(m.group(1)))
         return issues, refs
 
     page_type = meta.get("type")
@@ -194,7 +231,7 @@ def lint_page(
 
     # Wikilinks
     for m in WIKILINK_RE.finditer(body):
-        target = m.group(1).strip()
+        target = _link_stem(m.group(1))
         refs.add(target)
         if target not in known_pages:
             issues.append(Issue("broken-wikilink", rel,

@@ -66,14 +66,18 @@ GRAPHQL_FEATURES: dict[str, bool] = {
     "vibe_api_enabled": True,
     "responsive_web_text_conversations_enabled": False,
     "freedom_of_speech_not_reach_fetch_enabled": True,
+    # Without this, long posts come back truncated to ~275 chars (no note_tweet).
+    "longform_notetweets_consumption_enabled": True,
     "longform_notetweets_rich_text_read_enabled": True,
     "longform_notetweets_inline_media_enabled": True,
     "responsive_web_enhance_cards_enabled": False,
     "tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled": True,
     "responsive_web_media_download_video_enabled": False,
+    "view_counts_everywhere_api_enabled": True,
 }
 
 DEFAULT_PAGE_COUNT = 20
+MAX_STALE_PAGES = 3  # stop after this many consecutive pages with nothing new
 TWITTER_EPOCH_MS = 1288834974657
 
 
@@ -150,6 +154,29 @@ class AuthError(RuntimeError):
 
 class RateLimitError(RuntimeError):
     """Raised when we exhaust 429 retries."""
+
+
+class QueryIdStaleError(RuntimeError):
+    """Raised when X rejects the hard-coded Bookmarks query (HTTP 400/404, or
+    a 200 body carrying only `errors`) — X rotated its private API."""
+
+
+def _stale_query_message(detail: str) -> str:
+    return (
+        f"X rejected the Bookmarks query ({detail}). X has most likely changed "
+        f"its private API: BOOKMARKS_QUERY_ID ({BOOKMARKS_QUERY_ID!r}) or the "
+        f"feature flags in scripts/graphql.py are out of date, and the engram "
+        f"plugin needs updating. Nothing was synced; your existing data is untouched."
+    )
+
+
+def _is_tco(url: str) -> bool:
+    """True if the URL's host is exactly t.co (an unexpanded short link)."""
+    try:
+        host = urllib.parse.urlsplit(url).hostname
+    except ValueError:
+        return False
+    return (host or "").lower() == "t.co"
 
 
 def _retry_after_seconds(err: urllib.error.HTTPError) -> float | None:
@@ -250,6 +277,10 @@ def _fetch_page(url: str, headers: dict[str, str]) -> dict[str, Any]:
                 body_snippet = err.read().decode("utf-8", errors="replace")[:500]
             except Exception:
                 pass
+            if status in (400, 404):
+                raise QueryIdStaleError(
+                    _stale_query_message(f"HTTP {status}; body: {body_snippet[:200]}")
+                ) from err
             raise RuntimeError(
                 f"GraphQL HTTP {status}: {err.reason}. Body: {body_snippet}"
             ) from err
@@ -284,14 +315,13 @@ def _find_entries_and_cursor(payload: dict[str, Any]) -> tuple[list[dict], str |
     data.bookmark_timeline_v2.timeline.instructions[].
     Cursor is the `content.value` of the `cursor-bottom-*` entry.
     """
-    timeline = (
-        payload.get("data", {})
-        .get("bookmark_timeline_v2", {})
-        .get("timeline", {})
-    )
-    instructions = timeline.get("instructions") or []
+    # `data`, `bookmark_timeline_v2` and `timeline` can each be null.
+    timeline = _get(payload, "data", "bookmark_timeline_v2", "timeline", default={})
+    instructions = timeline.get("instructions") if isinstance(timeline, dict) else None
     entries: list[dict] = []
-    for instr in instructions:
+    for instr in instructions if isinstance(instructions, list) else []:
+        if not isinstance(instr, dict):
+            continue
         itype = instr.get("type")
         if itype == "TimelineAddEntries":
             entries.extend(instr.get("entries") or [])
@@ -304,6 +334,8 @@ def _find_entries_and_cursor(payload: dict[str, Any]) -> tuple[list[dict], str |
     next_cursor: str | None = None
 
     for entry in entries:
+        if not isinstance(entry, dict):
+            continue
         entry_id = entry.get("entryId", "") or ""
         if entry_id.startswith("cursor-bottom"):
             next_cursor = (entry.get("content") or {}).get("value")
@@ -319,6 +351,17 @@ def _find_entries_and_cursor(payload: dict[str, Any]) -> tuple[list[dict], str |
             tweet_entries.append(entry)
 
     return tweet_entries, next_cursor
+
+
+def _describe_errors(errors: Any) -> str:
+    """One-line summary of a GraphQL top-level `errors` value."""
+    if not isinstance(errors, list):
+        return str(errors)[:300]
+    msgs = [
+        str(e.get("message") or e.get("code") or e) if isinstance(e, dict) else str(e)
+        for e in errors[:3]
+    ]
+    return "; ".join(msgs)[:300]
 
 
 def _unwrap_tweet(tweet_result: dict[str, Any]) -> dict[str, Any]:
@@ -447,7 +490,7 @@ def convert_tweet_to_record(
         if not isinstance(u, dict):
             continue
         expanded = u.get("expanded_url")
-        if expanded and "t.co" not in expanded:
+        if isinstance(expanded, str) and expanded and not _is_tco(expanded):
             links.append(expanded)
 
     # ---- quoted tweet ----------------------------------------------------
@@ -487,7 +530,10 @@ def convert_tweet_to_record(
             ]
             quoted_tweet = {
                 "id": str(qt_id),
-                "text": qt_legacy.get("full_text") or qt_legacy.get("text") or "",
+                "text": _get(qt, "note_tweet", "note_tweet_results", "result", "text")
+                or qt_legacy.get("full_text")
+                or qt_legacy.get("text")
+                or "",
                 "authorHandle": qt_handle,
                 "authorName": _get(qt_user, "core", "name")
                 or _get(qt_user, "legacy", "name")
@@ -573,6 +619,10 @@ class FetchOptions:
     page_delay_ms: int = 600
     stop_at_id: str | None = None  # stop when this tweet id is encountered
     on_page: Callable[[list[dict], dict], None] | None = None  # progress callback
+    # Output: set True by fetch_bookmarks() when pagination stopped early
+    # (max_pages or the stale-pages guard) rather than at the end of the
+    # timeline or at stop_at_id. Read it after the generator finishes.
+    truncated: bool = False
 
 
 def fetch_bookmarks(opts: FetchOptions) -> Iterator[dict]:
@@ -587,6 +637,11 @@ def fetch_bookmarks(opts: FetchOptions) -> Iterator[dict]:
       * 429 exponential backoff (honors Retry-After)
       * 5xx shorter backoff
       * 401/403 -> AuthError
+      * 400/404, or a 200 body with `errors` and no timeline -> QueryIdStaleError
+      * stops after MAX_STALE_PAGES consecutive pages with no new tweets
+
+    Sets ``opts.truncated = True`` when it stops because of max_pages or the
+    stale-pages guard (i.e. there may be more bookmarks it did not reach).
 
     The `on_page` callback, if provided, is invoked once per page with
     (records_on_this_page, meta_dict) where meta_dict contains
@@ -599,13 +654,35 @@ def fetch_bookmarks(opts: FetchOptions) -> Iterator[dict]:
     cursor = opts.cursor
     page_delay_sec = max(0.0, opts.page_delay_ms / 1000.0)
     total = 0
+    seen_ids: set[str] = set()
+    stale_pages = 0
+    opts.truncated = False
 
     for page in range(1, opts.max_pages + 1):
         url = _build_url(cursor, count=DEFAULT_PAGE_COUNT)
         _log(f"[graphql] page {page} cursor={cursor!s:.60}")
 
         payload = _fetch_page(url, headers)
+        if not isinstance(payload, dict):
+            payload = {}
         entries, next_cursor = _find_entries_and_cursor(payload)
+
+        # A 200 with top-level `errors` is NOT an empty timeline. If there is
+        # no timeline at all, the query itself was rejected (rotated query
+        # id / feature flags). If real entries came along, keep them.
+        errors = payload.get("errors")
+        if errors:
+            detail = _describe_errors(errors)
+            has_timeline = isinstance(
+                _get(payload, "data", "bookmark_timeline_v2", "timeline"), dict
+            )
+            if not entries and not has_timeline:
+                raise QueryIdStaleError(_stale_query_message(f"errors: {detail}"))
+            _log(f"[graphql] response carried errors alongside data: {detail}")
+        elif not entries and not next_cursor and not isinstance(
+            _get(payload, "data", "bookmark_timeline_v2", "timeline"), dict
+        ):
+            _log("[graphql] warning: response had no bookmark timeline object")
 
         now = _now_iso()
         page_records: list[dict] = []
@@ -625,6 +702,9 @@ def fetch_bookmarks(opts: FetchOptions) -> Iterator[dict]:
             page_records.append(record)
 
         total += len(page_records)
+        new_on_page = {r["tweetId"] for r in page_records} - seen_ids
+        seen_ids |= new_on_page
+        stale_pages = 0 if new_on_page else stale_pages + 1
 
         if opts.on_page is not None:
             try:
@@ -654,11 +734,20 @@ def fetch_bookmarks(opts: FetchOptions) -> Iterator[dict]:
             _log("[graphql] cursor did not advance; done")
             return
 
+        if stale_pages >= MAX_STALE_PAGES:
+            _log(
+                f"[graphql] {stale_pages} consecutive pages added no new "
+                f"bookmarks; stopping"
+            )
+            opts.truncated = True
+            return
+
         cursor = next_cursor
 
         if page < opts.max_pages and page_delay_sec > 0:
             time.sleep(page_delay_sec)
 
+    opts.truncated = True
     _log(f"[graphql] reached max_pages={opts.max_pages}; stopping")
 
 
@@ -710,6 +799,9 @@ def _main(argv: list[str]) -> int:
     except RateLimitError as err:
         _log(f"[graphql] RATE LIMITED: {err}")
         return 3
+    except QueryIdStaleError as err:
+        _log(f"[graphql] API CHANGED: {err}")
+        return 4
     except KeyboardInterrupt:
         _log("[graphql] interrupted")
         return 130

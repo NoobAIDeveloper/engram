@@ -1,6 +1,6 @@
 # Frontmatter schema
 
-Loaded during `/kb-ingest` and `/kb-lint`. Every wiki page starts with a
+Loaded during `/engram:kb-ingest` and `/engram:kb-lint`. Every wiki page starts with a
 YAML frontmatter block. Missing or malformed frontmatter is a lint
 error.
 
@@ -56,7 +56,7 @@ private: true | false   # optional
 | `person` | A profile of one author (their themes, stances, notable posts) | No |
 | `event` | A time-bounded thing — a launch, an outage, a news cycle | No |
 | `resource` | A curated list of links, tools, or reading | No |
-| `query` | Saved answer to a `/kb-query` question | No |
+| `query` | Saved answer to a `/engram:kb-query` question | No |
 | `stale` | Page no longer tracked after a recluster. Preserved for history | No |
 | `index` | The `wiki/index.md` catalog. Exempt from TLDR/sources/tags/counter-args | No |
 | `log` | The `wiki/log.md` audit trail. Exempt from TLDR/sources/tags/counter-args | No |

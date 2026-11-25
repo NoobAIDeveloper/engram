@@ -8,11 +8,17 @@ public stars) and emits one Item per starred repo.
 Configuration: the user's GitHub handle is read from
 `<kb>/.engram/sources.json` under the key `github.handle`. If that
 file doesn't exist or doesn't specify a handle, this adapter is a no-op.
+
+An optional personal access token raises the rate limit (60 → 5000
+requests/hour). It is taken from the `GITHUB_TOKEN` environment variable,
+else from `github.token` in sources.json.
 """
 
 from __future__ import annotations
 
 import json
+import os
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -25,17 +31,49 @@ from .base import Item
 SOURCE_ID = "github-stars"
 API = "https://api.github.com"
 PAGE_SIZE = 100
+MAX_PAGES = 50  # hard cap: 5000 stars
+
+
+def _read_github_config(kb_dir: Path) -> dict[str, Any]:
+    cfg = kb_dir / ".engram" / "sources.json"
+    if not cfg.exists():
+        return {}
+    try:
+        data = json.loads(cfg.read_text())
+    except (json.JSONDecodeError, OSError):
+        return {}
+    gh = (data.get("github") or {}) if isinstance(data, dict) else {}
+    return gh if isinstance(gh, dict) else {}
+
+
+def _load_token(kb_dir: Path | None) -> str | None:
+    """GITHUB_TOKEN env var wins; else `github.token` in sources.json."""
+    env = (os.environ.get("GITHUB_TOKEN") or "").strip()
+    if env:
+        return env
+    if kb_dir is None:
+        return None
+    tok = _read_github_config(kb_dir).get("token")
+    return tok.strip() if isinstance(tok, str) and tok.strip() else None
+
+
+def _rate_limit_reset(headers: Any) -> str:
+    """Human-readable "resets at ..." suffix from rate-limit headers."""
+    try:
+        reset = int(headers.get("x-ratelimit-reset") or 0)
+    except (TypeError, ValueError, AttributeError):
+        reset = 0
+    if reset > 0:
+        return " The limit resets at " + time.strftime("%H:%M:%S", time.localtime(reset)) + "."
+    try:
+        retry_after = int(headers.get("Retry-After") or 0)
+    except (TypeError, ValueError, AttributeError):
+        retry_after = 0
+    return f" Retry in about {retry_after}s." if retry_after > 0 else ""
 
 
 def _load_handle(kb_dir: Path) -> str | None:
-    cfg = kb_dir / ".engram" / "sources.json"
-    if not cfg.exists():
-        return None
-    try:
-        data = json.loads(cfg.read_text())
-    except json.JSONDecodeError:
-        return None
-    gh = (data.get("github") or {}) if isinstance(data, dict) else {}
+    gh = _read_github_config(kb_dir)
     handle = gh.get("handle")
     return handle.strip().lstrip("@") if isinstance(handle, str) and handle.strip() else None
 
@@ -60,9 +98,11 @@ def sync(kb_dir: Path, *, handle: str | None = None, token: str | None = None) -
         handle = _load_handle(kb_dir)
     if not handle:
         return []
+    if token is None:
+        token = _load_token(kb_dir)
 
     all_items: list[Item] = []
-    for page in range(1, 50):  # hard cap: 5000 stars
+    for page in range(1, MAX_PAGES + 1):
         try:
             page_data = _fetch_page(handle, page, token)
         except urllib.error.HTTPError as exc:
@@ -71,10 +111,40 @@ def sync(kb_dir: Path, *, handle: str | None = None, token: str | None = None) -
                     f"GitHub returned 404 for user {handle!r}. "
                     f"Check the handle in sources.json."
                 )
-            if exc.code == 403:
+            if exc.code == 401:
                 raise RuntimeError(
-                    "GitHub rate-limited us. Set a personal access token "
-                    "in sources.json under github.token to raise the limit."
+                    "GitHub rejected the access token (401). Check the "
+                    "GITHUB_TOKEN environment variable or github.token in "
+                    "sources.json."
+                )
+            headers = exc.headers
+            remaining = (headers.get("x-ratelimit-remaining") or "") if headers else ""
+            retry_after = (headers.get("Retry-After") or "") if headers else ""
+            # Primary limit: 403/429 with remaining == 0. Secondary limit:
+            # 403/429 with Retry-After. Any other 403 is a permission issue.
+            if exc.code == 429 or (
+                exc.code == 403 and (remaining.strip() == "0" or retry_after.strip())
+            ):
+                hint = (
+                    "" if token else
+                    " Set a personal access token (GITHUB_TOKEN environment "
+                    "variable, or github.token in sources.json) to raise the "
+                    "limit."
+                )
+                raise RuntimeError(
+                    f"GitHub rate-limited us ({exc.code})."
+                    f"{_rate_limit_reset(headers)}{hint}"
+                )
+            if exc.code == 403:
+                try:
+                    detail = json.loads(exc.read().decode("utf-8")).get("message") or ""
+                except Exception:
+                    detail = ""
+                raise RuntimeError(
+                    f"GitHub refused the request (403) for user {handle!r}"
+                    + (f": {detail}" if detail else ".")
+                    + " This is not a rate limit; check the token's "
+                    "permissions or whether access is blocked."
                 )
             raise
         if not page_data:
@@ -126,6 +196,12 @@ def sync(kb_dir: Path, *, handle: str | None = None, token: str | None = None) -
         if len(page_data) < PAGE_SIZE:
             break
         time.sleep(0.3)  # be polite
+    else:
+        print(
+            f"[github-stars] warning: stopped at the {MAX_PAGES}-page cap "
+            f"({MAX_PAGES * PAGE_SIZE} stars); older stars were not fetched.",
+            file=sys.stderr,
+        )
 
     return [it.to_json() for it in all_items]
 
@@ -140,8 +216,7 @@ if __name__ == "__main__":
     ap.add_argument("--limit", type=int, default=5)
     args = ap.parse_args()
 
-    import os
-    token = args.token or os.environ.get("GITHUB_TOKEN")
+    token = args.token or _load_token(args.kb)
 
     items = sync(args.kb, handle=args.handle, token=token)
     print(f"[github-stars] {len(items)} starred repo(s)")

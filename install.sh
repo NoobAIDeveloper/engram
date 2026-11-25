@@ -1,105 +1,74 @@
 #!/usr/bin/env bash
-# Install the engram Claude Code skill.
+# Install engram as a Claude Code plugin.
 #
-# Creates:
-#   ~/.claude/skills/engram           symlink to this repo
-#   ~/.claude/commands/kb-*.md        symlinks to commands/kb-*.md
-#   <repo>/.venv/                     Python venv with cryptography installed
+# This is a thin wrapper around the two commands in the README:
 #
-# All dependencies are handled automatically. The only real requirement is
-# Python 3.10+ (macOS 12+ ships with it; most Linux distros do too).
+#   claude plugin marketplace add NoobAIDeveloper/engram
+#   claude plugin install engram@engram
 #
-# Idempotent: safe to re-run. Use ./install.sh --uninstall to remove.
+# It also removes the symlinks that older versions of this script created
+# (~/.claude/skills/engram and ~/.claude/commands/kb-*.md), which no longer
+# work and would shadow the plugin.
+#
+# Python dependencies are NOT installed here: the plugin bootstraps its own
+# virtualenv the first time a command runs. The only requirement is
+# Python 3.10+.
+#
+# Usage: ./install.sh            install / update
+#        ./install.sh --uninstall
 
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-VENV_DIR="$REPO_DIR/.venv"
 SKILL_LINK="$HOME/.claude/skills/engram"
 COMMANDS_DIR="$HOME/.claude/commands"
 
-uninstall() {
-  echo "Removing engram skill..."
-  [ -L "$SKILL_LINK" ] && rm "$SKILL_LINK" && echo "  removed $SKILL_LINK"
+remove_legacy_links() {
+  if [ -L "$SKILL_LINK" ]; then
+    rm "$SKILL_LINK"
+    echo "  removed legacy link $SKILL_LINK"
+  fi
   for cmd in "$REPO_DIR"/commands/kb-*.md; do
-    name="$(basename "$cmd")"
-    target="$COMMANDS_DIR/$name"
+    target="$COMMANDS_DIR/$(basename "$cmd")"
+    # Only remove symlinks — never a real file the user wrote.
     if [ -L "$target" ]; then
       rm "$target"
-      echo "  removed $target"
+      echo "  removed legacy link $target"
     fi
   done
-  echo "Note: the .venv directory inside the repo is left in place."
-  echo "      delete it manually if you want to fully uninstall."
-  exit 0
 }
 
-[ "${1:-}" = "--uninstall" ] && uninstall
+if ! command -v claude >/dev/null 2>&1; then
+  echo "error: the 'claude' CLI was not found. Install Claude Code first:" >&2
+  echo "  https://claude.com/claude-code" >&2
+  exit 1
+fi
 
-# --- Python check ------------------------------------------------------------
+if [ "${1:-}" = "--uninstall" ]; then
+  echo "Removing engram..."
+  remove_legacy_links
+  claude plugin uninstall engram@engram || true
+  echo "Done. Your knowledge bases are untouched."
+  exit 0
+fi
 
-if ! command -v python3 >/dev/null 2>&1; then
-  cat >&2 <<EOF
-error: python3 is not installed.
-
-  macOS: installed by default on macOS 12+. If missing, run:
-           xcode-select --install
-         or install from https://www.python.org/downloads/
-
-  Linux: sudo apt install python3 python3-venv   (Debian/Ubuntu)
-         sudo dnf install python3                (Fedora)
+if ! command -v python3 >/dev/null 2>&1 ||
+   ! python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)'; then
+  cat >&2 <<'EOF'
+warning: Python 3.10+ was not found. engram will install, but its commands
+need it. Get it with:
+  macOS:  xcode-select --install   (or https://www.python.org/downloads/)
+  Linux:  sudo apt install python3 python3-venv   (Debian/Ubuntu)
 EOF
-  exit 1
 fi
 
-PY_VER="$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
-PY_OK="$(python3 -c 'import sys; print(1 if sys.version_info >= (3, 10) else 0)')"
-if [ "$PY_OK" != "1" ]; then
-  echo "error: Python 3.10+ required (found $PY_VER)" >&2
-  exit 1
-fi
+echo "Installing engram..."
+remove_legacy_links
+claude plugin marketplace add NoobAIDeveloper/engram || true   # ok if already added
+claude plugin marketplace update engram || true
+claude plugin install engram@engram || claude plugin update engram@engram
 
-# --- venv + deps -------------------------------------------------------------
-
-if [ ! -d "$VENV_DIR" ]; then
-  echo "Creating Python venv at $VENV_DIR ..."
-  python3 -m venv "$VENV_DIR"
-fi
-
-echo "Installing Python dependencies (cryptography) ..."
-"$VENV_DIR/bin/pip" install --quiet --upgrade pip
-"$VENV_DIR/bin/pip" install --quiet "cryptography>=42"
-
-# --- symlinks ----------------------------------------------------------------
-
-mkdir -p "$HOME/.claude/skills" "$COMMANDS_DIR"
-
-if [ -L "$SKILL_LINK" ] && [ "$(readlink "$SKILL_LINK")" = "$REPO_DIR" ]; then
-  echo "skill already linked"
-elif [ -e "$SKILL_LINK" ] || [ -L "$SKILL_LINK" ]; then
-  echo "error: $SKILL_LINK exists and does not point to $REPO_DIR" >&2
-  echo "  remove it and re-run: rm $SKILL_LINK && ./install.sh" >&2
-  exit 1
-else
-  ln -s "$REPO_DIR" "$SKILL_LINK"
-  echo "linked skill  -> $SKILL_LINK"
-fi
-
-for cmd in "$REPO_DIR"/commands/kb-*.md; do
-  name="$(basename "$cmd")"
-  target="$COMMANDS_DIR/$name"
-  if [ -L "$target" ] && [ "$(readlink "$target")" = "$cmd" ]; then
-    continue
-  fi
-  if [ -e "$target" ]; then
-    echo "  skipping $name (existing file is not our symlink)" >&2
-    continue
-  fi
-  ln -s "$cmd" "$target"
-  echo "linked command -> $target"
-done
-
-cat <<EOF
+cat <<'EOF'
 
 ---------------------------------------------------------------
 engram installed.
@@ -107,10 +76,13 @@ engram installed.
 Next steps:
 
   1. Open Claude Code in any directory:  claude
-  2. Scaffold a KB:                      /kb-init ~/my-kb
+  2. Scaffold a KB:                      /engram:kb-init ~/my-kb
   3. Open Claude Code inside it:         cd ~/my-kb && claude
-  4. Pull your bookmarks:                /kb-sync
-  5. Build the wiki:                     /kb-ingest
+  4. Pull your bookmarks:                /engram:kb-sync
+  5. Build the wiki:                     /engram:kb-ingest
+
+Working on engram itself? Run it straight from this checkout:
+  claude --plugin-dir .
 
 Uninstall: ./install.sh --uninstall
 ---------------------------------------------------------------

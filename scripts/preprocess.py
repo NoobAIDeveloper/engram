@@ -45,14 +45,30 @@ class Topic:
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "Topic":
+        if not isinstance(raw, dict) or not raw.get("name"):
+            raise ValueError(f"each topic must be an object with a `name`, got {raw!r}")
         name = str(raw["name"]).strip()
         if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", name):
             raise ValueError(
                 f"topic name {name!r} must be kebab-case (lowercase, hyphens only)"
             )
         match = raw.get("match") or {}
+        if not isinstance(match, dict):
+            raise ValueError(f"topic {name!r}: `match` must be an object")
+
+        def str_list(key: str) -> list[str]:
+            # A bare string would be iterated per character ("recipe" →
+            # r,e,c,i,p,e) and an empty string matches every item, so both
+            # are rejected / dropped here rather than silently mis-routing.
+            val = match.get(key) or []
+            if isinstance(val, str):
+                val = [val]
+            if not isinstance(val, list) or not all(isinstance(v, str) for v in val):
+                raise ValueError(f"topic {name!r}: `match.{key}` must be a list of strings")
+            return [v.strip() for v in val if v.strip()]
+
         patterns = []
-        for pat in match.get("regex", []) or []:
+        for pat in str_list("regex"):
             try:
                 patterns.append(re.compile(pat, re.IGNORECASE))
             except re.error as e:
@@ -60,11 +76,11 @@ class Topic:
         return cls(
             name=name,
             description=str(raw.get("description", "")).strip(),
-            keywords=[k.lower() for k in (match.get("keywords") or [])],
-            hashtags=[h.lstrip("#").lower() for h in (match.get("hashtags") or [])],
-            authors=[a.lstrip("@").lower() for a in (match.get("authors") or [])],
+            keywords=[k.lower() for k in str_list("keywords")],
+            hashtags=[h.lstrip("#").lower() for h in str_list("hashtags")],
+            authors=[a.lstrip("@").lower() for a in str_list("authors")],
             regexes=patterns,
-            sources=[s.lower() for s in (match.get("sources") or [])],
+            sources=[s.lower() for s in str_list("sources")],
         )
 
     def matches(self, item: dict[str, Any]) -> bool:
@@ -107,13 +123,16 @@ def load_cluster_map(path: Path) -> list[Topic]:
             "Bootstrap it first by sampling bookmarks and writing the topic map."
         )
     try:
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as e:
         sys.exit(f"error: {path} is not valid JSON: {e}")
     topics_raw = data.get("topics") if isinstance(data, dict) else None
     if not isinstance(topics_raw, list) or not topics_raw:
         sys.exit(f"error: {path} must define a non-empty `topics` list")
-    topics = [Topic.from_dict(t) for t in topics_raw]
+    try:
+        topics = [Topic.from_dict(t) for t in topics_raw]
+    except ValueError as e:
+        sys.exit(f"error: {path.name}: {e}")
     names = [t.name for t in topics]
     dupes = {n for n in names if names.count(n) > 1}
     if dupes:
@@ -123,7 +142,11 @@ def load_cluster_map(path: Path) -> list[Topic]:
 
 # ---- bookmark rendering -----------------------------------------------------
 
-def _fmt_count(n: int | None) -> str:
+def _fmt_count(n: Any) -> str:
+    try:
+        n = int(n or 0)
+    except (TypeError, ValueError):
+        return "0"
     if not n:
         return "0"
     if n >= 1000:
@@ -246,7 +269,7 @@ def write_batch(
         "",
     ]
     body = "\n".join(render_item(it) for it in items)
-    path.write_text("\n".join(header) + body)
+    path.write_text("\n".join(header) + body, encoding="utf-8")
 
 
 def write_manifest(
@@ -277,57 +300,71 @@ def write_manifest(
     for t in topics:
         lines.append(f"| [{t.name}]({t.name}.md) | {counts.get(t.name, 0)} | {t.description} |")
     lines.append(f"| [_unsorted](_unsorted.md) | {unsorted_count} | No match |")
-    path.write_text("\n".join(lines) + "\n")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 # ---- main -------------------------------------------------------------------
 
+def _read_jsonl(path: Path) -> list[dict[str, Any]]:
+    """Read a JSONL store, skipping (and reporting) lines that aren't JSON
+    objects. One truncated line must not take the whole KB down. Split on
+    "\n" — not splitlines() — because tweet text can contain U+2028."""
+    out: list[dict[str, Any]] = []
+    bad = 0
+    for line in path.read_text(encoding="utf-8", errors="replace").split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            bad += 1
+            continue
+        if isinstance(rec, dict):
+            out.append(rec)
+        else:
+            bad += 1
+    if bad:
+        print(f"warning: {path.name}: skipped {bad} malformed line(s)", file=sys.stderr)
+    return out
+
+
 def load_items_or_bookmarks(kb: Path) -> list[dict[str, Any]]:
-    """Prefer raw/items.jsonl (normalized, multi-source). Fall back to
-    raw/bookmarks.jsonl for KBs synced before the Item refactor — those
-    legacy dicts still work because matches() and render_item() accept
-    either shape."""
+    """Read raw/items.jsonl (normalized, multi-source) plus, for KBs first
+    synced before the Item refactor, any X bookmarks that only exist in the
+    legacy raw/bookmarks.jsonl.
+
+    The legacy merge matters: on an old KB the first non-X sync or chat
+    import creates items.jsonl without any X items, and preferring that
+    file outright would make every bookmark vanish from the batches."""
     items_path = kb / "raw" / "items.jsonl"
     legacy_path = kb / "raw" / "bookmarks.jsonl"
 
-    def _read(path: Path, label: str) -> list[dict[str, Any]]:
-        out: list[dict[str, Any]] = []
-        for i, line in enumerate(path.read_text().split("\n"), 1):
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                out.append(json.loads(line))
-            except json.JSONDecodeError as e:
-                sys.exit(f"error: {label} line {i}: {e}")
-        return out
+    if not items_path.exists() and not legacy_path.exists():
+        sys.exit(f"error: neither {items_path} nor {legacy_path} found. Run sync.py first.")
 
-    if items_path.exists():
-        return _read(items_path, "items.jsonl")
-    if legacy_path.exists():
-        print(
-            "note: reading legacy raw/bookmarks.jsonl. Re-run /kb-sync "
-            "to regenerate raw/items.jsonl in the new format.",
-            file=sys.stderr,
-        )
-        return _read(legacy_path, "bookmarks.jsonl")
-    sys.exit(f"error: neither {items_path} nor {legacy_path} found. Run sync.py first.")
+    items = _read_jsonl(items_path) if items_path.exists() else []
+    has_x = any((it.get("source") or "x").lower() == "x" for it in items)
+    if not has_x and legacy_path.exists():
+        legacy = _read_jsonl(legacy_path)
+        if legacy:
+            from sources.x import bookmarks_to_items
+
+            print(
+                f"note: merging {len(legacy)} X bookmark(s) from legacy "
+                "raw/bookmarks.jsonl. Run /kb-sync once to fold them into "
+                "raw/items.jsonl.",
+                file=sys.stderr,
+            )
+            items = bookmarks_to_items(legacy) + items
+    return items
 
 
 # Kept for backward compatibility with external imports.
 def load_bookmarks(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         sys.exit(f"error: {path} not found. Run sync.py first.")
-    out = []
-    for i, line in enumerate(path.read_text().split("\n"), 1):
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            out.append(json.loads(line))
-        except json.JSONDecodeError as e:
-            sys.exit(f"error: {path.name} line {i}: {e}")
-    return out
+    return _read_jsonl(path)
 
 
 def clean_batch_dir(batch_dir: Path) -> None:
@@ -340,41 +377,88 @@ def clean_batch_dir(batch_dir: Path) -> None:
             child.unlink()
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description="Apply cluster-map.json to bookmarks.")
-    ap.add_argument("--kb", required=True, type=Path, help="KB root directory")
-    args = ap.parse_args()
+# LLM classifications for items the rules couldn't place. Lives in .engram/
+# (not raw/bookmarks/) so it survives every preprocess run — otherwise each
+# /kb-ingest would dump those items back into _unsorted and batch sizes
+# would flap against ingest-state.json.
+OVERLAY_REL = Path(".engram") / "classifications.json"
 
-    kb: Path = args.kb.resolve()
-    map_path = kb / ".engram" / "cluster-map.json"
-    batch_dir = kb / "raw" / "bookmarks"
 
-    topics = load_cluster_map(map_path)
-    items = load_items_or_bookmarks(kb)
+def load_overlay(kb: Path) -> dict[str, list[str]]:
+    path = kb / OVERLAY_REL
+    if not path.exists():
+        return {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"warning: ignoring unreadable {OVERLAY_REL}: {e}", file=sys.stderr)
+        return {}
+    data = raw.get("classifications") if isinstance(raw, dict) else None
+    if not isinstance(data, dict):
+        return {}
+    return {
+        str(k): [t for t in v if isinstance(t, str)]
+        for k, v in data.items()
+        if isinstance(v, list)
+    }
 
+
+def route(
+    topics: list[Topic],
+    items: list[dict[str, Any]],
+    overlay: dict[str, list[str]] | None = None,
+) -> tuple[dict[str, list[dict[str, Any]]], list[dict[str, Any]], int]:
+    """Assign items to topic buckets. Rules win; the overlay only places
+    items no rule matched. Returns (buckets, unsorted, overlay_placed)."""
+    overlay = overlay or {}
     buckets: dict[str, list[dict[str, Any]]] = {t.name: [] for t in topics}
     unsorted: list[dict[str, Any]] = []
-
+    placed = 0
     for it in items:
         hit = False
         for t in topics:
             if t.matches(it):
                 buckets[t.name].append(it)
                 hit = True
-        if not hit:
+        if hit:
+            continue
+        # dict.fromkeys: dedupe while keeping order, so ["a", "a"] can't
+        # append the item twice. Unknown topics (e.g. after a recluster)
+        # are ignored.
+        assigned = [
+            name for name in dict.fromkeys(overlay.get(str(it.get("id")), []))
+            if name in buckets
+        ]
+        if assigned:
+            for name in assigned:
+                buckets[name].append(it)
+            placed += 1
+        else:
             unsorted.append(it)
+    return buckets, unsorted, placed
+
+
+def build_batches(kb: Path) -> dict[str, Any]:
+    """Route every item and rewrite raw/bookmarks/. Shared by preprocess and
+    apply_classifications so both always produce identical output."""
+    map_path = kb / ".engram" / "cluster-map.json"
+    batch_dir = kb / "raw" / "bookmarks"
+
+    topics = load_cluster_map(map_path)
+    items = load_items_or_bookmarks(kb)
+    buckets, unsorted, placed = route(topics, items, load_overlay(kb))
 
     clean_batch_dir(batch_dir)
     for t in topics:
         write_batch(batch_dir / f"{t.name}.md", t, buckets[t.name])
     write_batch(batch_dir / "_unsorted.md", None, unsorted)
-    # Structured form of the unsorted bucket so a classifier (Haiku
-    # subagent via /kb-ingest) can consume items directly without
-    # re-parsing the markdown.
+    # Structured form of the unsorted bucket so a classifier subagent
+    # (/kb-ingest) can consume items directly without re-parsing markdown.
     unsorted_jsonl = batch_dir / "_unsorted.jsonl"
     if unsorted:
         unsorted_jsonl.write_text(
-            "".join(json.dumps(it) + "\n" for it in unsorted)
+            "".join(json.dumps(it, ensure_ascii=False) + "\n" for it in unsorted),
+            encoding="utf-8",
         )
     elif unsorted_jsonl.exists():
         unsorted_jsonl.unlink()
@@ -394,13 +478,33 @@ def main() -> int:
         generated_at=generated_at,
         source_counts=source_counts,
     )
+    return {
+        "topics": topics,
+        "items": items,
+        "counts": counts,
+        "unsorted": unsorted,
+        "overlay_placed": placed,
+        "source_counts": source_counts,
+    }
 
-    print(f"preprocessed {len(items)} item(s) into {len(topics)} topic(s)")
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="Apply cluster-map.json to bookmarks.")
+    ap.add_argument("--kb", required=True, type=Path, help="KB root directory")
+    args = ap.parse_args()
+
+    kb: Path = args.kb.resolve()
+    r = build_batches(kb)
+    topics, counts = r["topics"], r["counts"]
+
+    print(f"preprocessed {len(r['items'])} item(s) into {len(topics)} topic(s)")
     for t in topics:
         print(f"  {t.name}: {counts[t.name]}")
-    print(f"  _unsorted: {len(unsorted)}")
-    if source_counts:
-        src_summary = ", ".join(f"{s}: {c}" for s, c in sorted(source_counts.items()))
+    print(f"  _unsorted: {len(r['unsorted'])}")
+    if r["overlay_placed"]:
+        print(f"  ({r['overlay_placed']} placed by saved LLM classifications)")
+    if r["source_counts"]:
+        src_summary = ", ".join(f"{s}: {c}" for s, c in sorted(r["source_counts"].items()))
         print(f"  sources: {src_summary}")
     return 0
 

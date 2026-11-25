@@ -1,8 +1,8 @@
 # {{kb_name}}
 
-A personal knowledge base built from Twitter/X bookmarks. Bookmarks are synced from a logged-in browser session, clustered into topic batches by a deterministic script using a Claude-derived map, and synthesized into wiki pages. This file is the operational contract between the user and Claude.
+A personal knowledge base built from your own saved content — Twitter/X bookmarks, AI chat history, Notion pages, meeting notes, browser bookmarks, GitHub stars, Kindle highlights. Items are synced into one local store, clustered into topic batches by a deterministic script using a Claude-derived map, and synthesized by Claude into an interlinked Obsidian wiki.
 
-> This KB is managed by the **engram** Claude Code skill. The skill provides slash commands (`/kb-sync`, `/kb-ingest`, `/kb-recluster`, `/kb-query`, `/kb-lint`, `/kb-status`) and the synthesis logic. See `~/.claude/skills/engram/SKILL.md` for the full operational spec.
+> This KB is managed by the **engram** Claude Code skill. The skill provides slash commands (`/engram:kb-sync`, `/engram:kb-ingest`, `/engram:kb-recluster`, `/engram:kb-query`, `/engram:kb-lint`, `/engram:kb-status`) and the synthesis logic. The plugin's SKILL.md holds the full operational spec.
 
 Created: {{created_date}}
 
@@ -14,7 +14,8 @@ Created: {{created_date}}
 {{kb_path}}/
 ├── CLAUDE.md                    # This file
 ├── raw/
-│   ├── bookmarks.jsonl          # Canonical bookmark store (sync.py writes; do not hand-edit)
+│   ├── items.jsonl              # Canonical item store, all sources (sync writes; do not hand-edit)
+│   ├── bookmarks.jsonl          # X-only raw store for incremental sync (do not hand-edit)
 │   └── bookmarks/               # Topic batches (preprocess.py writes; do not hand-edit)
 │       ├── _manifest.md
 │       └── <topic>.md
@@ -59,7 +60,7 @@ tags: [<emerge from content, no preset taxonomy>]
 - `concept` — synthesized topic page (most pages). **Requires a counter-arguments section.**
 - `summary` — condensed summary of a single source (rare for bookmark wikis)
 - `reference` — list/table page (e.g. "tools mentioned across the KB")
-- `query` — saved answer to a `/kb-query`
+- `query` — saved answer to a `/engram:kb-query`
 - `stale` — superseded by recluster but kept for history
 
 ### Body structure
@@ -142,7 +143,7 @@ Chronological audit log, **newest first**. One section per date. Operation entri
 
 ## Source classification & extraction
 
-For **tweets/threads** (the only source type for v1):
+For **tweets/threads**:
 
 - Extract the **core insight** plus enough surrounding context to make it standalone.
 - Include **author handle** and a link to the original tweet.
@@ -161,12 +162,12 @@ These are run by the user via slash commands and orchestrated by the **engram** 
 
 | Command | Effect |
 |---|---|
-| `/kb-sync` | Pulls new bookmarks from the user's browser session into `raw/bookmarks.jsonl` |
-| `/kb-ingest` | First run bootstraps `cluster-map.json`. Then preprocesses into batches, then synthesizes/updates wiki pages |
-| `/kb-recluster [hint]` | Re-derives the topic map and reconciles affected wiki pages |
-| `/kb-query <q>` | Answers a question grounded in the wiki, optionally saves the answer under `wiki/queries/` |
-| `/kb-lint` | Static + semantic health check, fixes what's auto-fixable |
-| `/kb-status` | Sync + ingest stats |
+| `/engram:kb-sync` | Pulls new items from the configured sources into `raw/items.jsonl` |
+| `/engram:kb-ingest` | First run bootstraps `cluster-map.json`. Then preprocesses into batches, then synthesizes/updates wiki pages |
+| `/engram:kb-recluster [hint]` | Re-derives the topic map and reconciles affected wiki pages |
+| `/engram:kb-query <q>` | Answers a question grounded in the wiki, optionally saves the answer under `wiki/queries/` |
+| `/engram:kb-lint` | Static + semantic health check, fixes what's auto-fixable |
+| `/engram:kb-status` | Sync + ingest stats |
 
 ---
 
@@ -177,7 +178,7 @@ When Claude opens a session in this KB:
 1. Read this `CLAUDE.md`.
 2. Read `wiki/index.md` to see what topics exist (skip if it doesn't exist yet — KB hasn't been ingested).
 3. Skim the last ~10 entries of `wiki/log.md` to understand recent operations.
-4. Check `.engram/sync-meta.json` to see when the last sync ran. If it's been >7 days, suggest `/kb-sync`.
+4. Check the `.engram/*sync-meta.json` files to see when the last sync ran. If it's been >7 days, suggest `/engram:kb-sync`.
 5. Ask the user what they want to do, or wait for a slash command.
 
 Never assume — always check state before acting.
@@ -188,5 +189,5 @@ Never assume — always check state before acting.
 
 - Not a personal journal — that's `notes/`.
 - Not a copy of every bookmark verbatim — it's synthesized insight, not an archive. The archive is `raw/bookmarks.jsonl`.
-- Not a domain-locked schema — topics emerge from what the user actually bookmarks. If their interests shift, `/kb-recluster`.
+- Not a domain-locked schema — topics emerge from what the user actually bookmarks. If their interests shift, `/engram:kb-recluster`.
 - Not a blog or publication — it's a private working knowledge base, optimized for the user's future self.

@@ -11,6 +11,9 @@ has to know whether a given record came from a tweet or a chat turn.
 from __future__ import annotations
 
 import json
+import os
+import shutil
+import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Sequence
@@ -56,25 +59,52 @@ class Item:
 def load_items(path: Path) -> list[dict[str, Any]]:
     """Load items.jsonl. Returns raw dicts (not Item) so downstream code can
     treat source-specific fields loosely. Split on "\n" to tolerate Unicode
-    line separators inside text fields."""
+    line separators inside text fields.
+
+    Malformed lines (e.g. a truncated write) are skipped with a warning
+    rather than raised: callers rewrite this file, so treating "unreadable"
+    as "empty" would wipe every other source's items. The damaged original
+    is copied to `<name>.corrupt.bak` once so nothing is lost silently."""
     if not path.exists():
         return []
     out: list[dict[str, Any]] = []
-    for i, line in enumerate(path.read_text(encoding="utf-8").split("\n"), 1):
+    bad: list[int] = []
+    raw = path.read_text(encoding="utf-8", errors="replace")
+    for i, line in enumerate(raw.split("\n"), 1):
         line = line.strip()
         if not line:
             continue
         try:
-            out.append(json.loads(line))
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"items.jsonl line {i}: {exc}") from exc
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            bad.append(i)
+            continue
+        if not isinstance(rec, dict):
+            bad.append(i)
+            continue
+        out.append(rec)
+    if bad:
+        backup = path.with_suffix(path.suffix + ".corrupt.bak")
+        if not backup.exists():
+            try:
+                shutil.copy2(path, backup)
+            except OSError:
+                pass
+        shown = ", ".join(str(n) for n in bad[:5]) + ("…" if len(bad) > 5 else "")
+        print(
+            f"[warn] {path.name}: skipped {len(bad)} malformed line(s) "
+            f"(line {shown}); original kept at {backup.name}",
+            file=sys.stderr,
+        )
     return out
 
 
 def write_items(path: Path, items: list[dict[str, Any]]) -> None:
     """Atomically rewrite items.jsonl."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
+    # pid-unique temp name so two concurrent syncs can't clobber each
+    # other's half-written file.
+    tmp = path.with_suffix(f"{path.suffix}.{os.getpid()}.tmp")
     body = "\n".join(json.dumps(it, ensure_ascii=False) for it in items)
     if body:
         body += "\n"
@@ -88,10 +118,14 @@ def merge_items(
 ) -> tuple[list[dict[str, Any]], int]:
     """Dedupe by id; newer record wins. Returns (merged, added_count)."""
     by_id: dict[str, dict[str, Any]] = {}
+    no_id: list[dict[str, Any]] = []
     for rec in existing:
         rid = rec.get("id")
         if rid:
             by_id[rid] = rec
+        else:
+            # Can't dedupe these, but never silently drop stored data.
+            no_id.append(rec)
     added = 0
     for rec in new:
         rid = rec.get("id")
@@ -101,7 +135,7 @@ def merge_items(
             added += 1
         by_id[rid] = rec
     merged = sorted(
-        by_id.values(),
+        [*by_id.values(), *no_id],
         key=lambda r: r.get("timestamp") or "",
         reverse=True,
     )
@@ -119,10 +153,7 @@ def replace_source_items(
     items_in_this_source).
     """
     items_path = kb_dir / "raw" / "items.jsonl"
-    try:
-        existing = load_items(items_path)
-    except ValueError:
-        existing = []
+    existing = load_items(items_path)
     kept = [it for it in existing if it.get("source") != source_id]
     combined, _ = merge_items(kept, new_items)
     write_items(items_path, combined)
@@ -137,10 +168,7 @@ def drop_items_by_id_prefix(kb_dir: Path, prefix: str) -> int:
     leave orphans behind. Returns the number of items dropped.
     """
     items_path = kb_dir / "raw" / "items.jsonl"
-    try:
-        existing = load_items(items_path)
-    except ValueError:
-        return 0
+    existing = load_items(items_path)
     kept = [it for it in existing if not str(it.get("id") or "").startswith(prefix)]
     dropped = len(existing) - len(kept)
     if dropped:
@@ -264,7 +292,10 @@ def chunk_by_size(
     for p in paragraphs:
         # Hard-split overlong paragraphs at word boundaries.
         while len(p) > max_chars:
-            split_at = p.rfind(" ", 0, max_chars) or max_chars
+            # rfind returns -1 when there is no space (CJK, long URLs,
+            # base64) — fall back to a hard cut at max_chars.
+            space_at = p.rfind(" ", 0, max_chars)
+            split_at = space_at if space_at > 0 else max_chars
             head, p = p[:split_at].strip(), p[split_at:].strip()
             if buf_len + len(head) > max_chars:
                 flush()
